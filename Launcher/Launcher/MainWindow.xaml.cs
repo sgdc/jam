@@ -5,7 +5,6 @@ using System.Diagnostics;
 using System.Linq;
 using System.Threading.Tasks;
 using System.Windows;
-using System.Windows.Threading;
 using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Media;
@@ -13,7 +12,10 @@ using System.Windows.Media.Imaging;
 
 namespace Launcher
 {
-    //XXX Nifty addition: versions? Possibly keep a cache of the loaded EXEs, if it's a new EXE, then display it as "new". If it was updated (file modification date has changed), display it as "updated". If a period of time passes (say 2 weeks), then remove the new/update display.
+    /* XXX Nifty addition:
+     * versions? Possibly keep a cache of the loaded EXEs, if it's a new EXE, then display it as "new". If it was updated (file modification date has changed), display it as "updated". If a period of time passes (say 2 weeks), then remove the new/update display.
+     * Quick-find? Games are divided by title's first letter, and each one has a header for that letter. The user can search by letter to quickly go through list (assuming there's many games)
+     */
 
     public class DelegateCommandBase : ICommand
     {
@@ -148,13 +150,51 @@ namespace Launcher
                     var possibleExes = System.IO.Directory.GetFiles(dir, "*.exe", System.IO.SearchOption.TopDirectoryOnly);
                     if (possibleExes.Length > 0)
                     {
+                        // Exe
                         var exe = possibleExes.First(); // May not be the best way to get exes
-                        var exeIcon = System.Drawing.Icon.ExtractAssociatedIcon(exe);
-                        var info = FileVersionInfo.GetVersionInfo(exe);
-                        var name = info.ProductName ?? System.IO.Path.GetFileNameWithoutExtension(exe);
-                        games.Add(new GameElement(name, info.FileDescription ?? string.Format("An awesome game called {0}", name), exe, exeIcon, this));
+
+                        // Icon
+                        System.Drawing.Icon exeIcon = null;
+                        var possibleIcons = System.IO.Directory.GetFiles(dir, "*.ico", System.IO.SearchOption.TopDirectoryOnly);
+                        if (possibleIcons.Length > 0)
+                        {
+                            exeIcon = new System.Drawing.Icon(possibleIcons.First()); // May not be the best way to get icons
+                        }
+                        else
+                        {
+                            exeIcon = System.Drawing.Icon.ExtractAssociatedIcon(exe);
+                        }
+
+                        // Name/Description
+                        var possibleInfo = System.IO.Directory.GetFiles(dir, "*.txt", System.IO.SearchOption.TopDirectoryOnly);
+                        string name = null;
+                        string desc = null;
+                        if (possibleInfo.Length > 0)
+                        {
+                            var infoFiles = possibleInfo.Where(file => System.IO.Path.GetFileNameWithoutExtension(file).IndexOf("Info", StringComparison.InvariantCultureIgnoreCase) >= 0);
+                            var infoFile = infoFiles.FirstOrDefault();
+                            if (infoFile != null)
+                            {
+                                using (var info = new System.IO.StreamReader(infoFile))
+                                {
+                                    name = info.ReadLine();
+                                    desc = info.ReadToEnd();
+                                }
+                            }
+                        }
+                        if (name == null)
+                        {
+                            var info = FileVersionInfo.GetVersionInfo(exe);
+                            name = info.ProductName ?? System.IO.Path.GetFileNameWithoutExtension(exe);
+                            desc = info.FileDescription ?? string.Format("An awesome game called {0}", name);
+                        }
+
+                        // Add game
+                        games.Add(new GameElement(name, desc, exe, exeIcon, this));
                     }
                 }
+                // Alphabetical order
+                games.Sort(new Comparison<GameElement>((f1, f2) => { return f1.Name.CompareTo(f2.Name); }));
                 return games.ToArray();
             }).ContinueWith(task =>
             {

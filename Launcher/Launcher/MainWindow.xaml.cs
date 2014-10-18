@@ -9,6 +9,7 @@ using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
+using NLog;
 
 namespace Launcher
 {
@@ -74,17 +75,22 @@ namespace Launcher
         private MainWindow ui;
         private Lazy<ImageSource> iconLazy;
 
-        public GameElement(string name, string description, string exe, System.Drawing.Icon icon, MainWindow ui)
+        public GameElement(string name, string description, int supportedPlayerCount, string exe, System.Drawing.Icon icon, MainWindow ui)
         {
             Name = name;
             Description = description;
             exePath = exe;
+            ExeFolder = System.IO.Path.GetDirectoryName(exe);
+            SupportedPlayerCount = supportedPlayerCount;
             iconLazy = new Lazy<ImageSource>(() =>
             {
                 return Imaging.CreateBitmapSourceFromHIcon(icon.Handle, Int32Rect.Empty, BitmapSizeOptions.FromEmptyOptions());
             });
             this.ui = ui;
         }
+
+        public string ExeFolder { get; private set; }
+        public int SupportedPlayerCount { get; private set; }
 
         public string Name { get; private set; }
         public string Description { get; private set; }
@@ -132,6 +138,10 @@ namespace Launcher
         public static readonly DependencyProperty AvaliableGamesProperty = DependencyProperty.Register("AvaliableGames", typeof(ObservableCollection<GameElement>), typeof(MainWindow), new PropertyMetadata(new ObservableCollection<GameElement>()));
         public static readonly DependencyProperty GameExecutingProperty = DependencyProperty.Register("GameExecuting", typeof(bool), typeof(MainWindow), new PropertyMetadata(false));
 
+        private const double SCROLL_REPEAT_DELAY = 250.0; // 250 ms between scrolling when pressing and holding a key
+        private DateTime lastScrollTime = DateTime.UtcNow;
+        private int scrollRepeatCount = 0;
+
         public MainWindow()
         {
             // Make sure the UI knows where to get data bindings from (yes, this is weird... I thought it should've been implicit, but doesn't seem to be the case)
@@ -169,15 +179,33 @@ namespace Launcher
                         var possibleInfo = System.IO.Directory.GetFiles(dir, "*.txt", System.IO.SearchOption.TopDirectoryOnly);
                         string name = null;
                         string desc = null;
+                        int playerCount = 2;
                         if (possibleInfo.Length > 0)
                         {
                             var infoFiles = possibleInfo.Where(file => System.IO.Path.GetFileNameWithoutExtension(file).IndexOf("Info", StringComparison.InvariantCultureIgnoreCase) >= 0);
                             var infoFile = infoFiles.FirstOrDefault();
                             if (infoFile != null)
                             {
+                                /*
+                                 * Format:
+                                 * - [optional] int <supported player count. Between 2 and 4>
+                                 * - string <game name>
+                                 * - [optional] string <game description>
+                                 */
+
                                 using (var info = new System.IO.StreamReader(infoFile))
                                 {
-                                    name = info.ReadLine();
+                                    var line = info.ReadLine();
+                                    if (int.TryParse(line, out playerCount))
+                                    {
+                                        playerCount = Math.Max(2, Math.Min(4, playerCount));
+                                        name = info.ReadLine();
+                                    }
+                                    else
+                                    {
+                                        playerCount = 2;
+                                        name = line;
+                                    }
                                     desc = info.ReadToEnd();
                                 }
                             }
@@ -190,7 +218,7 @@ namespace Launcher
                         }
 
                         // Add game
-                        games.Add(new GameElement(name, desc, exe, exeIcon, this));
+                        games.Add(new GameElement(name, desc, playerCount, exe, exeIcon, this));
                     }
                 }
                 // Alphabetical order
@@ -211,7 +239,76 @@ namespace Launcher
             }, TaskScheduler.FromCurrentSynchronizationContext());
         }
 
-        //TODO: need input control to change selected game
+        private void ItemListKeyUpHandler(object sender, KeyEventArgs e)
+        {
+            if (e.Key == Key.D1 || e.Key == Key.D2 || e.Key == Key.D3 || e.Key == Key.D4)
+            {
+                var game = GameItems.SelectedItem as GameElement;
+                if (game.Execute.CanExecute(game))
+                {
+                    var playerCount = e.Key - Key.D0;
+                    if (playerCount > 0 && playerCount <= game.SupportedPlayerCount)
+                    {
+                        var playerConf = System.IO.Path.Combine(game.ExeFolder, "Startup.cfg");
+                        using (var fs = new System.IO.StreamWriter(playerConf))
+                        {
+                            fs.WriteLine("PlayerCount: {0}", playerCount);
+                        }
+                        game.Execute.Execute(game);
+                    }
+                }
+                else
+                {
+                    GameError(null, game, "Game cannot be run");
+                }
+            }
+        }
+
+        private void ItemListKeyDownHandler(object sender, KeyEventArgs e)
+        {
+            // Do everything to this index, so we can make sure the list scrolls...
+            int? selectedIndex = null;
+            if (e.Key == Key.NumPad8 || e.Key == Key.R)
+            {
+                // Up
+                if (GameItems.SelectedIndex == 0)
+                {
+                    selectedIndex = AvaliableGames.Count - 1;
+                }
+                else
+                {
+                    selectedIndex = GameItems.SelectedIndex - 1;
+                }
+            }
+            else if (e.Key == Key.NumPad2 || e.Key == Key.F)
+            {
+                // Down
+                if (GameItems.SelectedIndex == AvaliableGames.Count - 1)
+                {
+                    selectedIndex = 0;
+                }
+                else
+                {
+                    selectedIndex = GameItems.SelectedIndex + 1;
+                }
+            }
+
+            // If we have an index, then we want to scroll if 1). This is a unique scoll press 2). The repeat of scolling has exceeded the delay we have
+            if (selectedIndex.HasValue && (!e.IsRepeat || (DateTime.UtcNow - lastScrollTime).Milliseconds >= SCROLL_REPEAT_DELAY))
+            {
+                lastScrollTime = DateTime.UtcNow;
+                GameItems.SelectedIndex = selectedIndex.Value;
+                GameItems.ScrollIntoView(GameItems.SelectedItem);
+                if (e.IsRepeat)
+                {
+                    scrollRepeatCount++;
+                }
+                else
+                {
+                    scrollRepeatCount = 0;
+                }
+            }
+        }
 
         public void GameError(Exception err, GameElement element, string message)
         {

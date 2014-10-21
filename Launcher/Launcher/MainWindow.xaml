@@ -5,35 +5,167 @@
         Title="Launcher" Height="1080" Width="1920"
         WindowStyle="None" ResizeMode="NoResize" WindowStartupLocation="CenterScreen" WindowState="Maximized">
     <Window.Resources>
+        <!-- From: http://codesdirectory.blogspot.com/2013/01/wpf-scrollbar-control-style.html -->
+        <Style x:Key="ScrollBarThumb" TargetType="{x:Type Thumb}">
+            <Setter Property="SnapsToDevicePixels" Value="True"/>
+            <Setter Property="OverridesDefaultStyle" Value="true"/>
+            <Setter Property="IsTabStop" Value="false"/>
+            <Setter Property="Focusable" Value="false"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="{x:Type Thumb}">
+                        <Border Background="#EFEFEF"
+                                BorderBrush="White"
+                                BorderThickness="0" />
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style x:Key="ScrollBarPageButton" TargetType="{x:Type RepeatButton}">
+            <Setter Property="SnapsToDevicePixels" Value="True"/>
+            <Setter Property="OverridesDefaultStyle" Value="true"/>
+            <Setter Property="IsTabStop" Value="false"/>
+            <Setter Property="Focusable" Value="false"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="{x:Type RepeatButton}">
+                        <Border Background="Transparent" />
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <ControlTemplate x:Key="HorizontalScrollBar" TargetType="{x:Type ScrollBar}">
+            <Grid Height="16">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="0.00001*"/>
+                </Grid.ColumnDefinitions>
+                <Border BorderBrush="White"
+                        Background="#D1D1D1" />
+                <Track Name="PART_Track"
+                       Grid.Column="1"
+                       IsDirectionReversed="False">
+                    <Track.DecreaseRepeatButton>
+                        <RepeatButton Style="{StaticResource ScrollBarPageButton}"
+                                      Command="ScrollBar.PageLeftCommand" />
+                    </Track.DecreaseRepeatButton>
+                    <Track.Thumb>
+                        <Thumb Style="{StaticResource ScrollBarThumb}" />
+                    </Track.Thumb>
+                    <Track.IncreaseRepeatButton>
+                        <RepeatButton Style="{StaticResource ScrollBarPageButton}"
+                                      Command="ScrollBar.PageRightCommand" />
+                    </Track.IncreaseRepeatButton>
+                </Track>
+            </Grid>
+        </ControlTemplate>
+
+        <ControlTemplate x:Key="VerticalScrollBar" TargetType="{x:Type ScrollBar}">
+            <Grid Width="16">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="0.00001*"/>
+                </Grid.RowDefinitions>
+                <Border BorderBrush="White"
+                        Background="#D1D1D1"/>
+                <Track Name="PART_Track"
+                       Grid.Row="1"
+                       IsDirectionReversed="True">
+                    <Track.DecreaseRepeatButton>
+                        <RepeatButton Style="{StaticResource ScrollBarPageButton}"
+                                      Command="ScrollBar.PageLeftCommand" />
+                    </Track.DecreaseRepeatButton>
+                    <Track.Thumb>
+                        <Thumb Style="{StaticResource ScrollBarThumb}" />
+                    </Track.Thumb>
+                    <Track.IncreaseRepeatButton>
+                        <RepeatButton Style="{StaticResource ScrollBarPageButton}"
+                                      Command="ScrollBar.PageRightCommand" />
+                    </Track.IncreaseRepeatButton>
+                </Track>
+            </Grid>
+        </ControlTemplate>
+
+        <Style x:Key="styleScrollBar" TargetType="{x:Type ScrollBar}">
+            <Setter Property="SnapsToDevicePixels" Value="True"/>
+            <Setter Property="OverridesDefaultStyle" Value="true"/>
+            <Style.Triggers>
+                <Trigger Property="Orientation" Value="Horizontal">
+                    <Setter Property="Width" Value="Auto"/>
+                    <Setter Property="Height" Value="16" />
+                    <Setter Property="Template" Value="{StaticResource HorizontalScrollBar}" />
+                </Trigger>
+                <Trigger Property="Orientation" Value="Vertical">
+                    <Setter Property="Width" Value="16"/>
+                    <Setter Property="Height" Value="Auto" />
+                    <Setter Property="Template" Value="{StaticResource VerticalScrollBar}" />
+                </Trigger>
+            </Style.Triggers>
+        </Style>
+
+        <!-- From: http://wildermuth.com/2007/04/17/Changing_the_Selected_Style_of_ListBox_s_in_XAML -->
+        <Style x:Key="listItemSelectionStyle" TargetType="{x:Type ListBoxItem}">
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="{x:Type ListBoxItem}">
+                        <Border Background="#E0E0E0"
+                                Opacity="0.5"
+                                x:Name="BackgroundBorder"
+                                Margin="5,5,5,5">
+                            <ContentPresenter />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsSelected" Value="true">
+                                <Trigger.EnterActions>
+                                    <BeginStoryboard>
+                                        <Storyboard>
+                                            <DoubleAnimation Storyboard.TargetName="BackgroundBorder"
+                                                             Storyboard.TargetProperty="Opacity"
+                                                             To="1.0"
+                                                             Duration="0:0:0.15" />
+                                        </Storyboard>
+                                    </BeginStoryboard>
+                                </Trigger.EnterActions>
+                                <Trigger.ExitActions>
+                                    <BeginStoryboard>
+                                        <Storyboard>
+                                            <DoubleAnimation Storyboard.TargetName="BackgroundBorder"
+                                                             Storyboard.TargetProperty="Opacity"
+                                                             To="0.5"
+                                                             Duration="0:0:0.15" />
+                                        </Storyboard>
+                                    </BeginStoryboard>
+                                </Trigger.ExitActions>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
         <DataTemplate DataType="{x:Type sgdc:GameElement}">
-            <Grid Margin="5,5,5,5">
-                <Grid.Background>
-                    <SolidColorBrush Color="LightGray" />
-                </Grid.Background>
-                
-                <Grid Margin="16,16,16,16">
+            <Grid Margin="16,16,16,16">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="245" />
+                </Grid.RowDefinitions>
+
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="275" />
+                    <ColumnDefinition Width="*" />
+                </Grid.ColumnDefinitions>
+
+                <Grid Grid.Column="0">
+                    <Image Source="{Binding Icon}" Stretch="None" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                </Grid>
+
+                <Grid Grid.Column="1" Margin="25,0,0,0">
                     <Grid.RowDefinitions>
-                        <RowDefinition Height="245" />
+                        <RowDefinition Height="60" />
+                        <RowDefinition Height="*" />
                     </Grid.RowDefinitions>
-                    
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="275" />
-                        <ColumnDefinition Width="*" />
-                    </Grid.ColumnDefinitions>
-                
-                    <Grid Grid.Column="0">
-                        <Image Source="{Binding Icon}" Stretch="None" HorizontalAlignment="Center" VerticalAlignment="Center" />
-                    </Grid>
-                
-                    <Grid Grid.Column="1" Margin="25,0,0,0">
-                        <Grid.RowDefinitions>
-                            <RowDefinition Height="60" />
-                            <RowDefinition Height="*" />
-                        </Grid.RowDefinitions>
-                    
-                        <TextBlock Grid.Row="0" Text="{Binding Name}" />
-                        <TextBlock Grid.Row="1" Text="{Binding Description}" TextWrapping="Wrap" Foreground="DarkGray" />
-                    </Grid>
+
+                    <TextBlock Grid.Row="0" Text="{Binding Name}" FontWeight="SemiBold" FontSize="48" Foreground="Black" />
+                    <TextBlock Grid.Row="1" Text="{Binding Description}" FontSize="28" TextWrapping="Wrap" Foreground="#838383" MaxWidth="650" />
                 </Grid>
             </Grid>
         </DataTemplate>
@@ -42,8 +174,7 @@
     <!-- FocusManager: http://msdn.microsoft.com/en-us/library/system.windows.input.focusmanager.focusedelement.aspx -->
     <Grid FocusManager.FocusedElement="{Binding ElementName=GameItems}" Cursor="None">
         <Grid.Background>
-            <!--<ImageBrush ImageSource="CabinetMockup-A.jpg"/>-->
-            <SolidColorBrush Color="Gray" />
+            <SolidColorBrush Color="#C1C1C1" />
         </Grid.Background>
         
         <Grid.RowDefinitions>
@@ -65,7 +196,13 @@
             <Grid Grid.Column="1">
                 <TextBlock Text="No Games Avaliable" HorizontalAlignment="Center" VerticalAlignment="Center" FontSize="72" FontWeight="Bold" TextDecorations="Underline" Visibility="{Binding NoGamesVisibility}" />
                 <TextBlock Text="Loading Games" HorizontalAlignment="Center" VerticalAlignment="Center" FontSize="72" FontWeight="Bold" Visibility="{Binding LoadingGamesVisibility}" />
-                <ListBox Name="GameItems" ItemsSource="{Binding AvaliableGames}" HorizontalContentAlignment="Stretch" KeyDown="ItemListKeyDownHandler" KeyUp="ItemListKeyUpHandler" SelectedIndex="0" Background="{x:Null}" BorderBrush="{x:Null}" />
+                <ListBox Name="GameItems" ItemsSource="{Binding AvaliableGames}" HorizontalContentAlignment="Stretch" 
+                         KeyDown="ItemListKeyDownHandler" KeyUp="ItemListKeyUpHandler" SelectedIndex="0" 
+                         Background="{x:Null}" BorderBrush="{x:Null}" ItemContainerStyle="{StaticResource ResourceKey=listItemSelectionStyle}">
+                    <ListBox.Resources>
+                        <Style TargetType="ScrollBar" BasedOn="{StaticResource ResourceKey=styleScrollBar}" />
+                    </ListBox.Resources>
+                </ListBox>
             </Grid>
         </Grid>
     </Grid>

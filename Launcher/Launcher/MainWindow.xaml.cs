@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Diagnostics;
 using System.Linq;
+using System.Text;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Input;
@@ -142,12 +143,17 @@ namespace Launcher
         private DateTime lastScrollTime = DateTime.UtcNow;
         private int scrollRepeatCount = 0;
 
+        private Logger log;
+
         public MainWindow()
         {
+            log = LogManager.GetLogger("launcher");
+
             // Make sure the UI knows where to get data bindings from (yes, this is weird... I thought it should've been implicit, but doesn't seem to be the case)
             this.DataContext = this;
 
             // Initialize the UI
+            log.Info("Setting up UI");
             InitializeComponent();
 
             // Search for games
@@ -157,21 +163,26 @@ namespace Launcher
                 var gamePath = System.IO.Path.Combine(Environment.CurrentDirectory, "Games");
                 foreach (var dir in System.IO.Directory.EnumerateDirectories(gamePath))
                 {
+                    log.Info("Checking folder for game \"{0}\"", dir);
                     var possibleExes = System.IO.Directory.GetFiles(dir, "*.exe", System.IO.SearchOption.TopDirectoryOnly);
                     if (possibleExes.Length > 0)
                     {
                         // Exe
                         var exe = possibleExes.First(); // May not be the best way to get exes
 
+                        log.Info("Found EXE \"{0}\"", exe);
+
                         // Icon
                         System.Drawing.Icon exeIcon = null;
                         var possibleIcons = System.IO.Directory.GetFiles(dir, "*.ico", System.IO.SearchOption.TopDirectoryOnly);
                         if (possibleIcons.Length > 0)
                         {
+                            log.Info("Found icon \"{0}\"", possibleIcons.First());
                             exeIcon = new System.Drawing.Icon(possibleIcons.First()); // May not be the best way to get icons
                         }
                         else
                         {
+                            log.Info("Loading icon from EXE");
                             exeIcon = System.Drawing.Icon.ExtractAssociatedIcon(exe);
                         }
 
@@ -187,34 +198,82 @@ namespace Launcher
                             if (infoFile != null)
                             {
                                 /*
-                                 * Format:
-                                 * - [optional] int <supported player count. Between 2 and 4>
-                                 * - string <game name>
-                                 * - [optional] string <game description>
+                                 * Format ([key]
+                                 *         value
+                                 *         % Comment):
+                                 * - [optional] int "SupportedPlayers" <supported player count. Between 2 and 4>
+                                 * - string "Title" <game name>
+                                 * - [optional] string "Description" <game description>
                                  */
+
+                                log.Info("Loading info from file \"{0}\"", infoFile);
 
                                 using (var info = new System.IO.StreamReader(infoFile))
                                 {
-                                    var line = info.ReadLine();
-                                    if (int.TryParse(line, out playerCount))
+                                    string line;
+                                    while ((line = info.ReadLine()) != null)
                                     {
-                                        playerCount = Math.Max(2, Math.Min(4, playerCount));
-                                        name = info.ReadLine();
+                                        if (!string.IsNullOrWhiteSpace(line) && !line.StartsWith("%"))
+                                        {
+                                            switch (line.ToLower())
+                                            {
+                                                case "[supportedplayers]":
+                                                    var tmpLine = info.ReadLine();
+                                                    if (int.TryParse(tmpLine, out playerCount))
+                                                    {
+                                                        log.Info("Got player count: {0}", playerCount);
+                                                        if (playerCount < 2 || playerCount > 4)
+                                                        {
+                                                            log.Warn("Player count must be between 2 and 4");
+                                                        }
+                                                        playerCount = Math.Max(2, Math.Min(4, playerCount));
+                                                    }
+                                                    else
+                                                    {
+                                                        log.Warn("Could not parse player count: \"{0}\"", tmpLine);
+                                                    }
+                                                    break;
+                                                case "[title]":
+                                                    name = info.ReadLine();
+                                                    break;
+                                                case "[description]":
+                                                    var builder = new StringBuilder();
+                                                    var c = -1;
+                                                    do
+                                                    {
+                                                        if (builder.Length > 0)
+                                                        {
+                                                            builder.Append(Environment.NewLine);
+                                                        }
+                                                        builder.Append(info.ReadLine());
+                                                        c = info.Peek();
+                                                    } while (c != '[' && c > 0);
+                                                    desc = builder.ToString();
+                                                    break;
+                                                default:
+                                                    if (line.StartsWith("[") && line.EndsWith("]"))
+                                                    {
+                                                        log.Info("Unknown Info key: \"{0}\"", line);
+                                                    }
+                                                    break;
+                                            }
+                                        }
                                     }
-                                    else
-                                    {
-                                        playerCount = 2;
-                                        name = line;
-                                    }
-                                    desc = info.ReadToEnd();
                                 }
                             }
                         }
-                        if (name == null)
+                        if (name == null || desc == null)
                         {
                             var info = FileVersionInfo.GetVersionInfo(exe);
-                            name = info.ProductName ?? System.IO.Path.GetFileNameWithoutExtension(exe);
-                            desc = info.FileDescription ?? string.Format("An awesome game called {0}", name);
+                            if (name == null)
+                            {
+                                name = info.ProductName ?? System.IO.Path.GetFileNameWithoutExtension(exe);
+                                playerCount = 2;
+                            }
+                            if (desc == null)
+                            {
+                                desc = info.FileDescription ?? string.Format("An awesome game called {0}", name);
+                            }
                         }
 
                         // Add game
@@ -223,6 +282,7 @@ namespace Launcher
                 }
                 // Alphabetical order
                 games.Sort(new Comparison<GameElement>((f1, f2) => { return f1.Name.CompareTo(f2.Name); }));
+                log.Info("Finished loading {0} games", games.Count);
                 return games.ToArray();
             }).ContinueWith(task =>
             {
@@ -234,6 +294,7 @@ namespace Launcher
                 this.SetValue(LoadingGamesVisibilityProperty, Visibility.Collapsed);
                 if (elements.Count == 0)
                 {
+                    log.Info("No games loaded");
                     this.SetValue(NoGamesVisibilityProperty, Visibility.Visible);
                 }
             }, TaskScheduler.FromCurrentSynchronizationContext());
@@ -261,6 +322,10 @@ namespace Launcher
                 {
                     GameError(null, game, "Game cannot be run");
                 }
+            }
+            else if (e.Key == Key.NumPad8 || e.Key == Key.R || e.Key == Key.NumPad2 || e.Key == Key.F)
+            {
+                scrollRepeatCount = 0;
             }
         }
 
@@ -293,8 +358,8 @@ namespace Launcher
                 }
             }
 
-            // If we have an index, then we want to scroll if 1). This is a unique scoll press 2). The repeat of scolling has exceeded the delay we have
-            if (selectedIndex.HasValue && (!e.IsRepeat || (DateTime.UtcNow - lastScrollTime).Milliseconds >= SCROLL_REPEAT_DELAY))
+            // If we have an index, then we want to scroll if 1). This is a unique scoll press 2). The repeat of scolling has exceeded the delay we have. Repeat scrolling speeds up over time.
+            if (selectedIndex.HasValue && (!e.IsRepeat || (DateTime.UtcNow - lastScrollTime).Milliseconds >= SCROLL_REPEAT_DELAY / Math.Log(scrollRepeatCount + Math.E)))
             {
                 lastScrollTime = DateTime.UtcNow;
                 GameItems.SelectedIndex = selectedIndex.Value;
@@ -312,11 +377,19 @@ namespace Launcher
 
         public void GameError(Exception err, GameElement element, string message)
         {
-            //TODO
+            if (err != null)
+            {
+                log.Error(string.Format("Error with {0}: {1}", element.Name, message), err);
+            }
+            else
+            {
+                log.Warn("Issue with {0}: {1}", element.Name, message);
+            }
         }
 
         public void GameRunning(GameElement element, Process game)
         {
+            log.Info("Starting {0}", element.Name);
             if (GameExecuting)
             {
                 // Should not happen
@@ -337,6 +410,7 @@ namespace Launcher
                     var runningProcess = (Process)process;
                     if (!runningProcess.Responding) //XXX Actual crash isn't triggering this...
                     {
+                        log.Info("{0} stopped responding", element.Name);
                         try
                         {
                             runningProcess.Kill();
@@ -346,9 +420,10 @@ namespace Launcher
                             GameError(e, element, "Process stopped responding");
                         }
                     }
-                }, game, 1000, 5000);
+                }, game, 1000, 5000); // ms delay of first run, ms repeat interval
                 game.Exited += (s, e) =>
                 {
+                    log.Info("{0} exited", element.Name);
                     processingTest.Dispose();
                     var exitedProcess = (Process)s;
                     if (exitedProcess.ExitCode != 0)

@@ -76,17 +76,14 @@ namespace Launcher
         private MainWindow ui;
         private Lazy<ImageSource> iconLazy;
 
-        public GameElement(string name, string description, int supportedPlayerCount, string exe, System.Drawing.Icon icon, MainWindow ui)
+        public GameElement(string name, string description, int supportedPlayerCount, string exe, Lazy<ImageSource> icon, MainWindow ui)
         {
             Name = name;
             Description = description;
             exePath = exe;
             ExeFolder = System.IO.Path.GetDirectoryName(exe);
             SupportedPlayerCount = supportedPlayerCount;
-            iconLazy = new Lazy<ImageSource>(() =>
-            {
-                return Imaging.CreateBitmapSourceFromHIcon(icon.Handle, Int32Rect.Empty, BitmapSizeOptions.FromEmptyOptions());
-            });
+            iconLazy = icon;
             this.ui = ui;
         }
 
@@ -173,21 +170,41 @@ namespace Launcher
                         log.Info("Found EXE \"{0}\"", exe);
 
                         // Icon
-                        System.Drawing.Icon exeIcon = null;
-                        var possibleIcons = System.IO.Directory.GetFiles(dir, "*.ico", System.IO.SearchOption.TopDirectoryOnly);
+                        Lazy<ImageSource> exeIcon = null;
+                        var possibleIcons = System.IO.Directory.EnumerateFiles(dir)
+                                                               .Where(file => System.IO.Path.GetExtension(file).Equals(".ico", StringComparison.InvariantCultureIgnoreCase) || 
+                                                                              System.IO.Path.GetExtension(file).Equals(".png", StringComparison.InvariantCultureIgnoreCase))
+                                                               .ToArray();
                         if (possibleIcons.Length > 0)
                         {
-                            log.Info("Found icon \"{0}\"", possibleIcons.First());
-                            exeIcon = new System.Drawing.Icon(possibleIcons.First()); // May not be the best way to get icons
+                            var icon = possibleIcons.First();
+                            log.Info("Found icon \"{0}\"", icon);
+                            if (System.IO.Path.GetExtension(icon).Equals(".ico", StringComparison.InvariantCultureIgnoreCase))
+                            {
+                                exeIcon = new Lazy<ImageSource>(() =>
+                                {
+                                    return Imaging.CreateBitmapSourceFromHIcon(new System.Drawing.Icon(icon).Handle, Int32Rect.Empty, BitmapSizeOptions.FromEmptyOptions());
+                                });
+                            }
+                            else
+                            {
+                                exeIcon = new Lazy<ImageSource>(() =>
+                                {
+                                    return new BitmapImage(new Uri(icon));
+                                });
+                            }
                         }
                         else
                         {
                             log.Info("Loading icon from EXE");
-                            exeIcon = System.Drawing.Icon.ExtractAssociatedIcon(exe);
+                            exeIcon = new Lazy<ImageSource>(() =>
+                            {
+                                return Imaging.CreateBitmapSourceFromHIcon(System.Drawing.Icon.ExtractAssociatedIcon(exe).Handle, Int32Rect.Empty, BitmapSizeOptions.FromEmptyOptions());
+                            });
                         }
 
                         // Name/Description
-                        var possibleInfo = System.IO.Directory.GetFiles(dir, "*.txt", System.IO.SearchOption.TopDirectoryOnly);
+                        var possibleInfo = System.IO.Directory.GetFiles(dir, "*.ini", System.IO.SearchOption.TopDirectoryOnly);
                         string name = null;
                         string desc = null;
                         int playerCount = 2;

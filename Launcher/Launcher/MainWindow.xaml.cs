@@ -75,12 +75,14 @@ namespace Launcher
         private string exePath;
         private MainWindow ui;
         private Lazy<ImageSource> iconLazy;
+        private string args;
 
-        public GameElement(string name, string description, int supportedPlayerCount, string exe, Lazy<ImageSource> icon, MainWindow ui)
+        public GameElement(string name, string description, int supportedPlayerCount, string exe, string arguments, Lazy<ImageSource> icon, MainWindow ui)
         {
             Name = name;
             Description = description;
             exePath = exe;
+            args = arguments;
             ExeFolder = System.IO.Path.GetDirectoryName(exe);
             SupportedPlayerCount = supportedPlayerCount;
             iconLazy = icon;
@@ -109,6 +111,10 @@ namespace Launcher
                     info.UseShellExecute = true;
                     info.WindowStyle = ProcessWindowStyle.Maximized;
                     info.WorkingDirectory = System.IO.Path.GetDirectoryName(exePath);
+                    if (!string.IsNullOrWhiteSpace(args))
+                    {
+                        info.Arguments = args;
+                    }
 
                     var game = new Process();
                     game.StartInfo = info;
@@ -207,7 +213,8 @@ namespace Launcher
                         var possibleInfo = System.IO.Directory.GetFiles(dir, "*.ini", System.IO.SearchOption.TopDirectoryOnly);
                         string name = null;
                         string desc = null;
-                        int playerCount = 2;
+                        string args = null;
+                        var playerCount = 2;
                         if (possibleInfo.Length > 0)
                         {
                             var infoFiles = possibleInfo.Where(file => System.IO.Path.GetFileNameWithoutExtension(file).IndexOf("Info", StringComparison.InvariantCultureIgnoreCase) >= 0);
@@ -220,7 +227,8 @@ namespace Launcher
                                  *         % Comment):
                                  * - [optional] int "SupportedPlayers" <supported player count. Between 2 and 4>
                                  * - string "Title" <game name>
-                                 * - [optional] string "Description" <game description>
+                                 * - [optional] string "Description" <game description, can be multiple lines>
+                                 * - [optional] string "Arguments" <game arguments>
                                  */
 
                                 log.Info("Loading info from file \"{0}\"", infoFile);
@@ -230,7 +238,7 @@ namespace Launcher
                                     string line;
                                     while ((line = info.ReadLine()) != null)
                                     {
-                                        if (!string.IsNullOrWhiteSpace(line) && !line.StartsWith("%"))
+                                        if (!string.IsNullOrWhiteSpace(line) && !line.TrimStart().StartsWith("%"))
                                         {
                                             switch (line.ToLower())
                                             {
@@ -265,7 +273,10 @@ namespace Launcher
                                                         builder.Append(info.ReadLine());
                                                         c = info.Peek();
                                                     } while (c != '[' && c > 0);
-                                                    desc = builder.ToString();
+                                                    desc = builder.ToString().TrimEnd();
+                                                    break;
+                                                case "[arguments]":
+                                                    args = info.ReadLine();
                                                     break;
                                                 default:
                                                     if (line.StartsWith("[") && line.EndsWith("]"))
@@ -294,7 +305,7 @@ namespace Launcher
                         }
 
                         // Add game
-                        games.Add(new GameElement(name, desc, playerCount, exe, exeIcon, this));
+                        games.Add(new GameElement(name, desc, playerCount, exe, args, exeIcon, this));
                     }
                 }
                 // Alphabetical order

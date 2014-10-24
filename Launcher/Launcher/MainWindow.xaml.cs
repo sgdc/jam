@@ -183,7 +183,8 @@ namespace Launcher
                                                                .ToArray();
                         if (possibleIcons.Length > 0)
                         {
-                            var icon = possibleIcons.First();
+                            var filtered = possibleIcons.Where(file => System.IO.Path.GetFileNameWithoutExtension(file).IndexOf("Icon") >= 0);
+                            var icon = filtered.FirstOrDefault() ?? possibleIcons.First();
                             log.Info("Found icon \"{0}\"", icon);
                             if (System.IO.Path.GetExtension(icon).Equals(".ico", StringComparison.InvariantCultureIgnoreCase))
                             {
@@ -342,6 +343,7 @@ namespace Launcher
                         using (var fs = new System.IO.StreamWriter(playerConf))
                         {
                             fs.WriteLine("PlayerCount: {0}", playerCount);
+                            fs.WriteLine("StartTime: {0}", DateTime.Now);
                         }
                         game.Execute.Execute(game);
                     }

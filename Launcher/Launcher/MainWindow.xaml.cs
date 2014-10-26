@@ -19,119 +19,6 @@ namespace Launcher
      * Quick-find? Games are divided by title's first letter, and each one has a header for that letter. The user can search by letter to quickly go through list (assuming there's many games)
      */
 
-    public class DelegateCommandBase : ICommand
-    {
-        private Action<object> exec;
-        private Func<object, bool> canExec;
-
-        public DelegateCommandBase(Action<object> execute, Func<object, bool> canExecute)
-        {
-            exec = execute;
-            canExec = canExecute;
-        }
-
-        public DelegateCommandBase(Action<object> execute)
-            : this(execute, arg => true)
-        {
-        }
-
-        public event EventHandler CanExecuteChanged;
-
-        public bool CanExecute(object parameter)
-        {
-            return canExec(parameter);
-        }
-
-        public void Execute(object parameter)
-        {
-            exec(parameter);
-        }
-
-        public void RaiseCanExecuteChanged()
-        {
-            var handle = CanExecuteChanged;
-            if (handle != null)
-            {
-                handle(this, EventArgs.Empty);
-            }
-        }
-    }
-
-    public sealed class DelegateCommand : DelegateCommandBase
-    {
-        public DelegateCommand(Action execute, Func<bool> canExecute)
-            : base(arg => execute(), arg => canExecute())
-        {
-        }
-
-        public DelegateCommand(Action execute)
-            : this(execute, () => true)
-        {
-        }
-    }
-
-    public class GameElement
-    {
-        private string exePath;
-        private MainWindow ui;
-        private Lazy<ImageSource> iconLazy;
-        private string args;
-
-        public GameElement(string name, string description, int supportedPlayerCount, string exe, string arguments, Lazy<ImageSource> icon, MainWindow ui)
-        {
-            Name = name;
-            Description = description;
-            exePath = exe;
-            args = arguments;
-            ExeFolder = System.IO.Path.GetDirectoryName(exe);
-            SupportedPlayerCount = supportedPlayerCount;
-            iconLazy = icon;
-            this.ui = ui;
-        }
-
-        public string ExeFolder { get; private set; }
-        public int SupportedPlayerCount { get; private set; }
-
-        public string Name { get; private set; }
-        public string Description { get; private set; }
-        public ImageSource Icon
-        {
-            get
-            {
-                return iconLazy.Value;
-            }
-        }
-        public DelegateCommand Execute
-        {
-            get
-            {
-                return new DelegateCommand(() =>
-                {
-                    var info = new ProcessStartInfo(exePath);
-                    info.UseShellExecute = true;
-                    info.WindowStyle = ProcessWindowStyle.Maximized;
-                    info.WorkingDirectory = System.IO.Path.GetDirectoryName(exePath);
-                    if (!string.IsNullOrWhiteSpace(args))
-                    {
-                        info.Arguments = args;
-                    }
-
-                    var game = new Process();
-                    game.StartInfo = info;
-                    game.EnableRaisingEvents = true;
-                    if (game.Start())
-                    {
-                        ui.GameRunning(this, game);
-                    }
-                    else
-                    {
-                        ui.GameError(null, this, "Could not start game");
-                    }
-                });
-            }
-        }
-    }
-
     /// <summary>
     /// Interaction logic for MainWindow.xaml
     /// </summary>
@@ -143,10 +30,12 @@ namespace Launcher
         public static readonly DependencyProperty GameExecutingProperty = DependencyProperty.Register("GameExecuting", typeof(bool), typeof(MainWindow), new PropertyMetadata(false));
 
         private const double SCROLL_REPEAT_DELAY = 250.0; // 250 ms between scrolling when pressing and holding a key
+        private const int DAYS_BEFORE_VERSION_NOTIFICATION_RESET = 14; // If game is new or updated, how many days before it is no longer "updated" or "new"?
         private DateTime lastScrollTime = DateTime.UtcNow;
         private int scrollRepeatCount = 0;
 
         private Logger log;
+        private IDisposable versionUpdateTimer = null;
 
         public MainWindow()
         {
@@ -160,164 +49,13 @@ namespace Launcher
             InitializeComponent();
 
             // Search for games
-            Task.Factory.StartNew(() =>
-            {
-                var games = new List<GameElement>();
-                var gamePath = System.IO.Path.Combine(Environment.CurrentDirectory, "Games");
-                foreach (var dir in System.IO.Directory.EnumerateDirectories(gamePath))
-                {
-                    log.Info("Checking folder for game \"{0}\"", dir);
-                    var possibleExes = System.IO.Directory.GetFiles(dir, "*.exe", System.IO.SearchOption.TopDirectoryOnly);
-                    if (possibleExes.Length > 0)
-                    {
-                        // Exe
-                        var exe = possibleExes.First(); // May not be the best way to get exes
-
-                        log.Info("Found EXE \"{0}\"", exe);
-
-                        // Icon
-                        Lazy<ImageSource> exeIcon = null;
-                        var possibleIcons = System.IO.Directory.EnumerateFiles(dir)
-                                                               .Where(file => System.IO.Path.GetExtension(file).Equals(".ico", StringComparison.InvariantCultureIgnoreCase) || 
-                                                                              System.IO.Path.GetExtension(file).Equals(".png", StringComparison.InvariantCultureIgnoreCase))
-                                                               .ToArray();
-                        if (possibleIcons.Length > 0)
-                        {
-                            var filtered = possibleIcons.Where(file => System.IO.Path.GetFileNameWithoutExtension(file).IndexOf("Icon") >= 0);
-                            var icon = filtered.FirstOrDefault() ?? possibleIcons.First();
-                            log.Info("Found icon \"{0}\"", icon);
-                            if (System.IO.Path.GetExtension(icon).Equals(".ico", StringComparison.InvariantCultureIgnoreCase))
-                            {
-                                exeIcon = new Lazy<ImageSource>(() =>
-                                {
-                                    return Imaging.CreateBitmapSourceFromHIcon(new System.Drawing.Icon(icon).Handle, Int32Rect.Empty, BitmapSizeOptions.FromEmptyOptions());
-                                });
-                            }
-                            else
-                            {
-                                exeIcon = new Lazy<ImageSource>(() =>
-                                {
-                                    return new BitmapImage(new Uri(icon));
-                                });
-                            }
-                        }
-                        else
-                        {
-                            log.Info("Loading icon from EXE");
-                            exeIcon = new Lazy<ImageSource>(() =>
-                            {
-                                return Imaging.CreateBitmapSourceFromHIcon(System.Drawing.Icon.ExtractAssociatedIcon(exe).Handle, Int32Rect.Empty, BitmapSizeOptions.FromEmptyOptions());
-                            });
-                        }
-
-                        // Name/Description
-                        var possibleInfo = System.IO.Directory.GetFiles(dir, "*.ini", System.IO.SearchOption.TopDirectoryOnly);
-                        string name = null;
-                        string desc = null;
-                        string args = null;
-                        var playerCount = 2;
-                        if (possibleInfo.Length > 0)
-                        {
-                            var infoFiles = possibleInfo.Where(file => System.IO.Path.GetFileNameWithoutExtension(file).IndexOf("Info", StringComparison.InvariantCultureIgnoreCase) >= 0);
-                            var infoFile = infoFiles.FirstOrDefault();
-                            if (infoFile != null)
-                            {
-                                /*
-                                 * Format ([key]
-                                 *         value
-                                 *         % Comment):
-                                 * - [optional] int "SupportedPlayers" <supported player count. Between 2 and 4>
-                                 * - string "Title" <game name>
-                                 * - [optional] string "Description" <game description, can be multiple lines>
-                                 * - [optional] string "Arguments" <game arguments>
-                                 */
-
-                                log.Info("Loading info from file \"{0}\"", infoFile);
-
-                                using (var info = new System.IO.StreamReader(infoFile))
-                                {
-                                    string line;
-                                    while ((line = info.ReadLine()) != null)
-                                    {
-                                        if (!string.IsNullOrWhiteSpace(line) && !line.TrimStart().StartsWith("%"))
-                                        {
-                                            switch (line.ToLower())
-                                            {
-                                                case "[supportedplayers]":
-                                                    var tmpLine = info.ReadLine();
-                                                    if (int.TryParse(tmpLine, out playerCount))
-                                                    {
-                                                        log.Info("Got player count: {0}", playerCount);
-                                                        if (playerCount < 2 || playerCount > 4)
-                                                        {
-                                                            log.Warn("Player count must be between 2 and 4");
-                                                        }
-                                                        playerCount = Math.Max(2, Math.Min(4, playerCount));
-                                                    }
-                                                    else
-                                                    {
-                                                        log.Warn("Could not parse player count: \"{0}\"", tmpLine);
-                                                    }
-                                                    break;
-                                                case "[title]":
-                                                    name = info.ReadLine();
-                                                    break;
-                                                case "[description]":
-                                                    var builder = new StringBuilder();
-                                                    var c = -1;
-                                                    do
-                                                    {
-                                                        if (builder.Length > 0)
-                                                        {
-                                                            builder.Append(Environment.NewLine);
-                                                        }
-                                                        builder.Append(info.ReadLine());
-                                                        c = info.Peek();
-                                                    } while (c != '[' && c > 0);
-                                                    desc = builder.ToString().TrimEnd();
-                                                    break;
-                                                case "[arguments]":
-                                                    args = info.ReadLine();
-                                                    break;
-                                                default:
-                                                    if (line.StartsWith("[") && line.EndsWith("]"))
-                                                    {
-                                                        log.Info("Unknown Info key: \"{0}\"", line);
-                                                    }
-                                                    break;
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        if (name == null || desc == null)
-                        {
-                            var info = FileVersionInfo.GetVersionInfo(exe);
-                            if (name == null)
-                            {
-                                name = info.ProductName ?? System.IO.Path.GetFileNameWithoutExtension(exe);
-                                playerCount = 2;
-                            }
-                            if (desc == null)
-                            {
-                                desc = info.FileDescription ?? string.Format("An awesome game called {0}", name);
-                            }
-                        }
-
-                        // Add game
-                        games.Add(new GameElement(name, desc, playerCount, exe, args, exeIcon, this));
-                    }
-                }
-                // Alphabetical order
-                games.Sort(new Comparison<GameElement>((f1, f2) => { return f1.Name.CompareTo(f2.Name); }));
-                log.Info("Finished loading {0} games", games.Count);
-                return games.ToArray();
-            }).ContinueWith(task =>
+            Task.Factory.StartNew(new Func<GameElement[]>(LoadGames)).ContinueWith(task =>
             {
                 var elements = (ObservableCollection<GameElement>)this.GetValue(AvaliableGamesProperty);
+                var needsUpdateTimer = false;
                 foreach (var game in task.Result)
                 {
+                    needsUpdateTimer |= game.NewGameVisibility == System.Windows.Visibility.Visible || game.UpdatedGameVisibility == System.Windows.Visibility.Visible;
                     elements.Add(game);
                 }
                 this.SetValue(LoadingGamesVisibilityProperty, Visibility.Collapsed);
@@ -326,8 +64,328 @@ namespace Launcher
                     log.Info("No games loaded");
                     this.SetValue(NoGamesVisibilityProperty, Visibility.Visible);
                 }
+
+                if (needsUpdateTimer)
+                {
+                    // Setup timer to update changes
+                    versionUpdateTimer = new System.Threading.Timer(state =>
+                    {
+                        Task.Factory.StartNew(() =>
+                        {
+                            if (!UpdateGameVersions(AvaliableGames, false))
+                            {
+                                // No longer needs to process
+                                versionUpdateTimer.Dispose();
+                                versionUpdateTimer = null;
+                            }
+                        }, System.Threading.CancellationToken.None, TaskCreationOptions.None, TaskScheduler.FromCurrentSynchronizationContext()).Wait();
+                    }, null, TimeSpan.FromHours(1), TimeSpan.FromDays(1));
+                }
             }, TaskScheduler.FromCurrentSynchronizationContext());
         }
+
+        protected override void OnClosing(System.ComponentModel.CancelEventArgs e)
+        {
+            base.OnClosing(e);
+            if (versionUpdateTimer != null)
+            {
+                versionUpdateTimer.Dispose();
+            }
+        }
+
+        #region UpdateGameVersions
+
+        // Expects to be run in the proper context
+        private static bool UpdateGameVersions(ICollection<GameElement> gamesToUpdate, bool buildingList)
+        {
+            var time = DateTime.Now;
+            var table = new Dictionary<string, DateTime>();
+            var gamelist = System.IO.Path.GetFullPath(System.IO.Path.Combine(Environment.CurrentDirectory, "GameList.dat"));
+            var updated = false;
+            var listUpdated = false;
+
+            if (System.IO.File.Exists(gamelist))
+            {
+                // Get current game list, if they exist
+                using (var sr = new System.IO.StreamReader(gamelist))
+                {
+                    var name = sr.ReadLine();
+                    DateTime modTime;
+                    long fileTime;
+                    if (long.TryParse(sr.ReadLine(), out fileTime))
+                    {
+                        modTime = DateTime.FromFileTime(fileTime);
+                    }
+                    else
+                    {
+                        modTime = time;
+                    }
+                    table.Add(name, modTime);
+                }
+            }
+
+            // Check games to update
+            // Idea is: if game is new, mark as new.
+            var diff = TimeSpan.FromDays(DAYS_BEFORE_VERSION_NOTIFICATION_RESET);
+            for (var i = 0; i < gamesToUpdate.Count; i++)
+            {
+                var element = gamesToUpdate.ElementAt(i);
+                var fileTime = System.IO.File.GetLastWriteTime(element.ExeFile);
+                if (table.ContainsKey(element.Name))
+                {
+                    if (time - table[element.Name] >= diff)
+                    {
+                        // Game is now "old"
+                        if (element.NewGameVisibility == Visibility.Visible || element.UpdatedGameVisibility == Visibility.Visible)
+                        {
+                            updated = true;
+                            listUpdated = true;
+                            element.NewGameVisibility = Visibility.Collapsed;
+                            element.UpdatedGameVisibility = Visibility.Collapsed;
+                            table[element.Name] = fileTime;
+                        }
+                    }
+                    else
+                    {
+                        if (fileTime != table[element.Name])
+                        {
+                            // Game was updated
+                            updated = true;
+                            element.NewGameVisibility = Visibility.Collapsed;
+                            element.UpdatedGameVisibility = Visibility.Visible;
+                        }
+                        else if (buildingList)
+                        {
+                            // Game is "new" for our purproses. Might make people look at it instead of disregard it
+                            updated = true;
+                            element.NewGameVisibility = Visibility.Visible;
+                            element.UpdatedGameVisibility = Visibility.Collapsed;
+                        }
+                    }
+                }
+                else
+                {
+                    // Add to table
+                    updated = true;
+                    listUpdated = true;
+                    table.Add(element.Name, fileTime);
+                    element.NewGameVisibility = Visibility.Visible;
+                    element.UpdatedGameVisibility = Visibility.Collapsed;
+                }
+            }
+
+            // Write new list if updated
+            if (listUpdated)
+            {
+                using (var sw = new System.IO.StreamWriter(gamelist))
+                {
+                    foreach (var tableElement in table)
+                    {
+                        sw.WriteLine(tableElement.Key);
+                        sw.WriteLine(tableElement.Value.ToFileTime());
+                    }
+                }
+            }
+
+            return updated;
+        }
+
+        #endregion
+
+        #region LoadGames
+
+        private GameElement[] LoadGames()
+        {
+            var games = new List<GameElement>();
+            var gamePath = System.IO.Path.Combine(Environment.CurrentDirectory, "Games");
+            var gameNames = new HashSet<string>();
+            foreach (var dir in System.IO.Directory.EnumerateDirectories(gamePath))
+            {
+                log.Info("Checking folder for game \"{0}\"", dir);
+                var possibleExes = System.IO.Directory.GetFiles(dir, "*.exe", System.IO.SearchOption.TopDirectoryOnly);
+                if (possibleExes.Length > 0)
+                {
+                    // Exe
+                    var exe = possibleExes.First(); // May not be the best way to get exes
+
+                    log.Info("Found EXE \"{0}\"", exe);
+
+                    // Icon
+                    Lazy<ImageSource> exeIcon = null;
+                    var possibleIcons = System.IO.Directory.EnumerateFiles(dir)
+                                                           .Where(file => System.IO.Path.GetExtension(file).Equals(".ico", StringComparison.InvariantCultureIgnoreCase) ||
+                                                                          System.IO.Path.GetExtension(file).Equals(".png", StringComparison.InvariantCultureIgnoreCase))
+                                                           .ToArray();
+                    if (possibleIcons.Length > 0)
+                    {
+                        var filtered = possibleIcons.Where(file => System.IO.Path.GetFileNameWithoutExtension(file).IndexOf("Icon") >= 0);
+                        var icon = filtered.FirstOrDefault() ?? possibleIcons.First();
+                        log.Info("Found icon \"{0}\"", icon);
+                        if (System.IO.Path.GetExtension(icon).Equals(".ico", StringComparison.InvariantCultureIgnoreCase))
+                        {
+                            exeIcon = new Lazy<ImageSource>(() =>
+                            {
+                                return Imaging.CreateBitmapSourceFromHIcon(new System.Drawing.Icon(icon).Handle, Int32Rect.Empty, BitmapSizeOptions.FromEmptyOptions());
+                            });
+                        }
+                        else
+                        {
+                            exeIcon = new Lazy<ImageSource>(() =>
+                            {
+                                return new BitmapImage(new Uri(icon));
+                            });
+                        }
+                    }
+                    else
+                    {
+                        log.Info("Loading icon from EXE");
+                        exeIcon = new Lazy<ImageSource>(() =>
+                        {
+                            return Imaging.CreateBitmapSourceFromHIcon(System.Drawing.Icon.ExtractAssociatedIcon(exe).Handle, Int32Rect.Empty, BitmapSizeOptions.FromEmptyOptions());
+                        });
+                    }
+
+                    // Name/Description
+                    var possibleInfo = System.IO.Directory.GetFiles(dir, "*.ini", System.IO.SearchOption.TopDirectoryOnly);
+                    string name = null;
+                    string desc = null;
+                    string args = null;
+                    string ver = null;
+                    var playerCount = 2;
+                    if (possibleInfo.Length > 0)
+                    {
+                        var infoFiles = possibleInfo.Where(file => System.IO.Path.GetFileNameWithoutExtension(file).IndexOf("Info", StringComparison.InvariantCultureIgnoreCase) >= 0);
+                        var infoFile = infoFiles.FirstOrDefault();
+                        if (infoFile != null)
+                        {
+                            /*
+                             * Format ([key]
+                             *         value
+                             *         % Comment):
+                             * - [optional] int "SupportedPlayers" <supported player count. Between 2 and 4>
+                             * - string "Title" <game name>
+                             * - [optional] string "Description" <game description, can be multiple lines>
+                             * - [optional] string "Arguments" <game arguments>
+                             * - [optional] string "Version" <game version X.X.X.X>
+                             */
+
+                            log.Info("Loading info from file \"{0}\"", infoFile);
+
+                            using (var info = new System.IO.StreamReader(infoFile))
+                            {
+                                string line;
+                                while ((line = info.ReadLine()) != null)
+                                {
+                                    if (!string.IsNullOrWhiteSpace(line) && !line.TrimStart().StartsWith("%"))
+                                    {
+                                        switch (line.ToLower())
+                                        {
+                                            case "[supportedplayers]":
+                                                var tmpLine = info.ReadLine();
+                                                if (int.TryParse(tmpLine, out playerCount))
+                                                {
+                                                    log.Info("Got player count: {0}", playerCount);
+                                                    if (playerCount < 2 || playerCount > 4)
+                                                    {
+                                                        log.Warn("Player count must be between 2 and 4");
+                                                    }
+                                                    playerCount = Math.Max(2, Math.Min(4, playerCount));
+                                                }
+                                                else
+                                                {
+                                                    log.Warn("Could not parse player count: \"{0}\"", tmpLine);
+                                                }
+                                                break;
+                                            case "[title]":
+                                                name = info.ReadLine();
+                                                break;
+                                            case "[description]":
+                                                var builder = new StringBuilder();
+                                                var c = -1;
+                                                do
+                                                {
+                                                    if (builder.Length > 0)
+                                                    {
+                                                        builder.Append(Environment.NewLine);
+                                                    }
+                                                    builder.Append(info.ReadLine());
+                                                    c = info.Peek();
+                                                } while (c != '[' && c > 0);
+                                                desc = builder.ToString().TrimEnd();
+                                                break;
+                                            case "[arguments]":
+                                                args = info.ReadLine();
+                                                break;
+                                            case "[version]":
+                                                ver = info.ReadLine();
+                                                if (string.IsNullOrWhiteSpace(ver))
+                                                {
+                                                    ver = null;
+                                                }
+                                                break;
+                                            default:
+                                                if (line.StartsWith("[") && line.EndsWith("]"))
+                                                {
+                                                    log.Info("Unknown Info key: \"{0}\"", line);
+                                                }
+                                                break;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    if (name == null || desc == null || ver == null)
+                    {
+                        var info = FileVersionInfo.GetVersionInfo(exe);
+                        if (name == null)
+                        {
+                            name = info.ProductName ?? System.IO.Path.GetFileNameWithoutExtension(exe);
+                            playerCount = 2;
+                        }
+                        if (desc == null)
+                        {
+                            desc = info.FileDescription ?? string.Format("An awesome game called {0}", name);
+                        }
+                        if (ver == null)
+                        {
+                            if (string.IsNullOrWhiteSpace(info.ProductVersion))
+                            {
+                                ver = "1.0";
+                            }
+                            else
+                            {
+                                ver = info.ProductVersion;
+                            }
+                        }
+                    }
+
+                    // Add game
+                    if (!gameNames.Contains(name))
+                    {
+                        gameNames.Add(name);
+                        games.Add(new GameElement(name, desc, playerCount, ver, exe, args, exeIcon, this));
+                    }
+                    else
+                    {
+                        log.Warn("Can't add game \"{0}\" because a game with the same name already exists.", name);
+                    }
+                }
+            }
+
+            // Alphabetical order
+            games.Sort(new Comparison<GameElement>((f1, f2) => { return f1.Name.CompareTo(f2.Name); }));
+            log.Info("Finished loading {0} games", games.Count);
+
+            // Build new-ness list
+            UpdateGameVersions(games, true);
+
+            return games.ToArray();
+        }
+
+        #endregion
+
+        #region Input Handlers
 
         private void ItemListKeyUpHandler(object sender, KeyEventArgs e)
         {
@@ -404,6 +462,8 @@ namespace Launcher
                 }
             }
         }
+
+        #endregion
 
         public void GameError(Exception err, GameElement element, string message)
         {

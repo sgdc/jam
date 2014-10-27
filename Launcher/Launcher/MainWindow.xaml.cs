@@ -68,16 +68,20 @@ namespace Launcher
                 if (needsUpdateTimer)
                 {
                     // Setup timer to update changes
+                    log.Info("Setting up game \"new-ness\" timer");
                     versionUpdateTimer = new System.Threading.Timer(state =>
                     {
+                        log.Info("Running game \"new-ness\" timer");
                         Task.Factory.StartNew(() =>
                         {
-                            if (!UpdateGameVersions(AvaliableGames, false))
+                            if (!UpdateGameVersions(AvaliableGames, false, log))
                             {
                                 // No longer needs to process
+                                log.Info("Game \"new-ness\" timer is no longer needed");
                                 versionUpdateTimer.Dispose();
                                 versionUpdateTimer = null;
                             }
+                            log.Info("Game \"new-ness\" timer finished");
                         }, System.Threading.CancellationToken.None, TaskCreationOptions.None, TaskScheduler.FromCurrentSynchronizationContext()).Wait();
                     }, null, TimeSpan.FromHours(1), TimeSpan.FromDays(1));
                 }
@@ -86,6 +90,7 @@ namespace Launcher
 
         protected override void OnClosing(System.ComponentModel.CancelEventArgs e)
         {
+            log.Info("Shutting down");
             base.OnClosing(e);
             if (versionUpdateTimer != null)
             {
@@ -95,37 +100,43 @@ namespace Launcher
 
         #region UpdateGameVersions
 
-        // Expects to be run in the proper context
-        private static bool UpdateGameVersions(ICollection<GameElement> gamesToUpdate, bool buildingList)
+        // Expects to be run in the proper threading context
+        private static bool UpdateGameVersions(ICollection<GameElement> gamesToUpdate, bool buildingList, Logger log)
         {
+            // Game list file is in format of <game name>{new line}<exe modification time, as a long>
+
             var time = DateTime.Now;
             var table = new Dictionary<string, DateTime>();
             var gamelist = System.IO.Path.GetFullPath(System.IO.Path.Combine(Environment.CurrentDirectory, "GameList.dat"));
-            var updated = false;
+            var updatesRequired = false;
             var listUpdated = false;
 
             if (System.IO.File.Exists(gamelist))
             {
                 // Get current game list, if they exist
+                log.Info("Opening original game list");
                 using (var sr = new System.IO.StreamReader(gamelist))
                 {
-                    var name = sr.ReadLine();
-                    DateTime modTime;
-                    long fileTime;
-                    if (long.TryParse(sr.ReadLine(), out fileTime))
+                    string name;
+                    while ((name = sr.ReadLine()) != null)
                     {
-                        modTime = DateTime.FromFileTime(fileTime);
+                        DateTime modTime;
+                        long fileTime;
+                        if (long.TryParse(sr.ReadLine(), out fileTime))
+                        {
+                            modTime = DateTime.FromFileTime(fileTime);
+                        }
+                        else
+                        {
+                            modTime = time;
+                        }
+                        table.Add(name, modTime);
                     }
-                    else
-                    {
-                        modTime = time;
-                    }
-                    table.Add(name, modTime);
                 }
+                log.Info("Loaded {0} games from game list", table.Count);
             }
 
             // Check games to update
-            // Idea is: if game is new, mark as new.
             var diff = TimeSpan.FromDays(DAYS_BEFORE_VERSION_NOTIFICATION_RESET);
             for (var i = 0; i < gamesToUpdate.Count; i++)
             {
@@ -138,7 +149,6 @@ namespace Launcher
                         // Game is now "old"
                         if (element.NewGameVisibility == Visibility.Visible || element.UpdatedGameVisibility == Visibility.Visible)
                         {
-                            updated = true;
                             listUpdated = true;
                             element.NewGameVisibility = Visibility.Collapsed;
                             element.UpdatedGameVisibility = Visibility.Collapsed;
@@ -147,17 +157,17 @@ namespace Launcher
                     }
                     else
                     {
-                        if (fileTime != table[element.Name])
+                        if (fileTime > table[element.Name])
                         {
                             // Game was updated
-                            updated = true;
+                            updatesRequired = true;
                             element.NewGameVisibility = Visibility.Collapsed;
                             element.UpdatedGameVisibility = Visibility.Visible;
                         }
                         else if (buildingList)
                         {
                             // Game is "new" for our purproses. Might make people look at it instead of disregard it
-                            updated = true;
+                            updatesRequired = true;
                             element.NewGameVisibility = Visibility.Visible;
                             element.UpdatedGameVisibility = Visibility.Collapsed;
                         }
@@ -166,7 +176,7 @@ namespace Launcher
                 else
                 {
                     // Add to table
-                    updated = true;
+                    updatesRequired = true;
                     listUpdated = true;
                     table.Add(element.Name, fileTime);
                     element.NewGameVisibility = Visibility.Visible;
@@ -174,9 +184,29 @@ namespace Launcher
                 }
             }
 
+            // Remove old games if no longer listed
+            if (buildingList && gamesToUpdate.Count != table.Count)
+            {
+                log.Info("Game list mismatch. Removing old games.");
+                listUpdated = true;
+                var gamesListed = new List<string>(table.Keys);
+                foreach (var game in gamesToUpdate)
+                {
+                    if (gamesListed.Contains(game.Name))
+                    {
+                        gamesListed.Remove(game.Name);
+                    }
+                }
+                foreach (var gameToRemove in gamesListed)
+                {
+                    table.Remove(gameToRemove);
+                }
+            }
+
             // Write new list if updated
             if (listUpdated)
             {
+                log.Info("Writing new game list");
                 using (var sw = new System.IO.StreamWriter(gamelist))
                 {
                     foreach (var tableElement in table)
@@ -187,7 +217,7 @@ namespace Launcher
                 }
             }
 
-            return updated;
+            return updatesRequired;
         }
 
         #endregion
@@ -196,8 +226,12 @@ namespace Launcher
 
         private GameElement[] LoadGames()
         {
-            var games = new List<GameElement>();
             var gamePath = System.IO.Path.Combine(Environment.CurrentDirectory, "Games");
+            if (!System.IO.Directory.Exists(gamePath))
+            {
+                return new GameElement[0];
+            }
+            var games = new List<GameElement>();
             var gameNames = new HashSet<string>();
             foreach (var dir in System.IO.Directory.EnumerateDirectories(gamePath))
             {
@@ -378,7 +412,7 @@ namespace Launcher
             log.Info("Finished loading {0} games", games.Count);
 
             // Build new-ness list
-            UpdateGameVersions(games, true);
+            UpdateGameVersions(games, true, log);
 
             return games.ToArray();
         }

@@ -156,6 +156,16 @@
 
                 <Grid Grid.Column="0">
                     <Image Source="{Binding Icon}" Stretch="None" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                    
+                    <Grid HorizontalAlignment="Stretch" VerticalAlignment="Stretch">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="150" />
+                        </Grid.ColumnDefinitions>
+
+                        <TextBlock Grid.Column="1" Text="NEW GAME!" FontSize="30" FontWeight="Bold" Foreground="Black" VerticalAlignment="Bottom" TextAlignment="Center" TextWrapping="Wrap" Visibility="{Binding NewGameVisibility}" />
+                        <TextBlock Grid.Column="1" Text="UPDATES!" FontSize="30" FontWeight="Bold" Foreground="Black" VerticalAlignment="Bottom" Visibility="{Binding UpdatedGameVisibility}" />
+                    </Grid>
                 </Grid>
 
                 <Grid Grid.Column="1" Margin="25,0,0,0">
@@ -166,6 +176,7 @@
 
                     <TextBlock Grid.Row="0" Text="{Binding Name}" FontWeight="SemiBold" FontSize="48" Foreground="Black" />
                     <TextBlock Grid.Row="1" Text="{Binding Description}" FontSize="28" TextWrapping="Wrap" Foreground="#838383" MaxWidth="650" />
+                    <TextBlock Grid.Row="1" Text="{Binding Version}" Opacity="0.5" HorizontalAlignment="Right" VerticalAlignment="Bottom" />
                 </Grid>
             </Grid>
         </DataTemplate>

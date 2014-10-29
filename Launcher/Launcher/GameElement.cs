@@ -76,15 +76,17 @@ namespace Launcher
             Name = name;
             Description = description;
             Version = gameVersion;
-            ExeFile = exe;
             args = arguments;
-            ExeFolder = System.IO.Path.GetDirectoryName(exe);
-            SupportedPlayerCount = supportedPlayerCount;
             iconLazy = icon;
             this.ui = ui;
 
             newGame = Visibility.Collapsed;
             updateGame = Visibility.Collapsed;
+
+            ExeFile = exe;
+            ExeFolder = System.IO.Path.GetDirectoryName(exe);
+            SupportedPlayerCount = supportedPlayerCount;
+            DesiredVolume = 75;
         }
 
         private void OnPropertyChanged(string name)
@@ -98,6 +100,7 @@ namespace Launcher
         public string ExeFile { get; private set; }
         public string ExeFolder { get; private set; }
         public int SupportedPlayerCount { get; private set; }
+        public int DesiredVolume { get; set; }
 
         public Visibility NewGameVisibility
         {

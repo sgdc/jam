@@ -163,14 +163,22 @@
                             <ColumnDefinition Width="150" />
                         </Grid.ColumnDefinitions>
 
-                        <TextBlock Grid.Column="1" Text="NEW GAME!" FontSize="30" FontWeight="Bold" Foreground="Black" VerticalAlignment="Bottom" TextAlignment="Center" TextWrapping="Wrap" Visibility="{Binding NewGameVisibility}" />
-                        <TextBlock Grid.Column="1" Text="UPDATES!" FontSize="30" FontWeight="Bold" Foreground="Black" VerticalAlignment="Bottom" Visibility="{Binding UpdatedGameVisibility}" />
+                        <TextBlock Grid.Column="1" Text="NEW GAME!" FontSize="30" FontWeight="Bold" Foreground="Black" VerticalAlignment="Bottom" TextAlignment="Center" TextWrapping="Wrap" Visibility="{Binding NewGameVisibility}">
+                            <TextBlock.Effect>
+                                <DropShadowEffect ShadowDepth="0" Color="Green" Opacity="1" BlurRadius="20" />
+                            </TextBlock.Effect>
+                        </TextBlock>
+                        <TextBlock Grid.Column="1" Text="UPDATES!" FontSize="30" FontWeight="Bold" Foreground="Black" VerticalAlignment="Bottom" Visibility="{Binding UpdatedGameVisibility}">
+                            <TextBlock.Effect>
+                                <DropShadowEffect ShadowDepth="0" Color="Yellow" Opacity="1" BlurRadius="20" />
+                            </TextBlock.Effect>
+                        </TextBlock>
                     </Grid>
                 </Grid>
 
                 <Grid Grid.Column="1" Margin="25,0,0,0">
                     <Grid.RowDefinitions>
-                        <RowDefinition Height="60" />
+                        <RowDefinition Height="68" />
                         <RowDefinition Height="*" />
                     </Grid.RowDefinitions>
 

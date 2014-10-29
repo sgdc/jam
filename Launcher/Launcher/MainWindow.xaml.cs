@@ -11,11 +11,13 @@ using System.Windows.Interop;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using NLog;
+using AudioSwitcher.AudioApi;
+using AudioSwitcher.AudioApi.CoreAudio;
 
 namespace Launcher
 {
-    /* XXX Nifty addition:
-     * versions? Possibly keep a cache of the loaded EXEs, if it's a new EXE, then display it as "new". If it was updated (file modification date has changed), display it as "updated". If a period of time passes (say 2 weeks), then remove the new/update display.
+    /* XXX Addition:
+     * Count the number of times a game has been played
      * Quick-find? Games are divided by title's first letter, and each one has a header for that letter. The user can search by letter to quickly go through list (assuming there's many games)
      */
 
@@ -36,6 +38,7 @@ namespace Launcher
 
         private Logger log;
         private IDisposable versionUpdateTimer = null;
+        private AudioController<CoreAudioDevice> audioController;
 
         public MainWindow()
         {
@@ -47,6 +50,9 @@ namespace Launcher
             // Initialize the UI
             log.Info("Setting up UI");
             InitializeComponent();
+
+            // Prepare for audio
+            audioController = new CoreAudioController();
 
             // Search for games
             Task.Factory.StartNew(new Func<GameElement[]>(LoadGames)).ContinueWith(task =>
@@ -96,6 +102,13 @@ namespace Launcher
             {
                 versionUpdateTimer.Dispose();
             }
+        }
+
+        private void SetVolume(int volume)
+        {
+            volume = Math.Min(Math.Max(volume, 0), 100);
+
+            audioController.DefaultPlaybackDevice.Volume = volume;
         }
 
         #region UpdateGameVersions
@@ -285,6 +298,7 @@ namespace Launcher
                     string desc = null;
                     string args = null;
                     string ver = null;
+                    var volume = -1;
                     var playerCount = 2;
                     if (possibleInfo.Length > 0)
                     {
@@ -301,6 +315,7 @@ namespace Launcher
                              * - [optional] string "Description" <game description, can be multiple lines>
                              * - [optional] string "Arguments" <game arguments>
                              * - [optional] string "Version" <game version X.X.X.X>
+                             * - [optional] int "Volume" <game volume vetween 0 and 100>
                              */
 
                             log.Info("Loading info from file \"{0}\"", infoFile);
@@ -357,6 +372,12 @@ namespace Launcher
                                                     ver = null;
                                                 }
                                                 break;
+                                            case "[volume]":
+                                                if (!int.TryParse(info.ReadLine(), out volume))
+                                                {
+                                                    volume = -1;
+                                                }
+                                                break;
                                             default:
                                                 if (line.StartsWith("[") && line.EndsWith("]"))
                                                 {
@@ -398,7 +419,12 @@ namespace Launcher
                     if (!gameNames.Contains(name))
                     {
                         gameNames.Add(name);
-                        games.Add(new GameElement(name, desc, playerCount, ver, exe, args, exeIcon, this));
+                        var game = new GameElement(name, desc, playerCount, ver, exe, args, exeIcon, this);
+                        if (volume >= 0 && volume <= 100)
+                        {
+                            game.DesiredVolume = volume;
+                        }
+                        games.Add(game);
                     }
                     else
                     {
@@ -437,6 +463,7 @@ namespace Launcher
                             fs.WriteLine("PlayerCount: {0}", playerCount);
                             fs.WriteLine("StartTime: {0}", DateTime.Now);
                         }
+                        SetVolume(game.DesiredVolume);
                         game.Execute.Execute(game);
                     }
                 }

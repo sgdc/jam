@@ -7,14 +7,11 @@ using System.Windows;
 // General Information about an assembly is controlled through the following 
 // set of attributes. Change these attribute values to modify the information
 // associated with an assembly.
-[assembly: AssemblyTitle("Launcher")]
-[assembly: AssemblyDescription("")]
-[assembly: AssemblyConfiguration("")]
-[assembly: AssemblyCompany("")]
-[assembly: AssemblyProduct("Launcher")]
-[assembly: AssemblyCopyright("Copyright ©  2014")]
-[assembly: AssemblyTrademark("")]
-[assembly: AssemblyCulture("")]
+[assembly: AssemblyTitle("SGDC JAM Game Launcher")]
+[assembly: AssemblyDescription("Launches games for SGDC's Arcade Machine")]
+[assembly: AssemblyCompany("Stevens Institute of Technology")]
+[assembly: AssemblyProduct("JAM-Launcher")]
+[assembly: AssemblyCopyright("Copyright © Stevens Institute of Technology 2014")]
 
 // Setting ComVisible to false makes the types in this assembly not visible 
 // to COM components.  If you need to access a type in this assembly from 

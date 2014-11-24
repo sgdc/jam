@@ -202,7 +202,7 @@
         </Grid.RowDefinitions>
         
         <Grid Grid.Row="0">
-            <TextBlock Text="SGDC" HorizontalAlignment="Center" VerticalAlignment="Center" FontSize="300" FontWeight="Bold" />
+            <Image Source="logo.png" HorizontalAlignment="Center" VerticalAlignment="Center" Margin="50" />
         </Grid>
 
         <Grid Grid.Row="1">

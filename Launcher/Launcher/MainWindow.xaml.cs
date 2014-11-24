@@ -108,7 +108,14 @@ namespace Launcher
         {
             volume = Math.Min(Math.Max(volume, 0), 100);
 
-            audioController.DefaultPlaybackDevice.Volume = volume;
+            try
+            {
+                audioController.DefaultPlaybackDevice.Volume = volume;
+            }
+            catch(Exception exp)
+            {
+                log.Warn("Error changing system volume for game", exp);
+            }
         }
 
         #region UpdateGameVersions
@@ -472,7 +479,8 @@ namespace Launcher
                     GameError(null, game, "Game cannot be run");
                 }
             }
-            else if (e.Key == Key.NumPad8 || e.Key == Key.R || e.Key == Key.NumPad2 || e.Key == Key.F)
+            if (e.Key == Key.NumPad8 || e.Key == Key.R || e.Key == Key.NumPad2 || e.Key == Key.F ||
+                e.Key == Key.NumPad4 || e.Key == Key.D || e.Key == Key.NumPad6 || e.Key == Key.G)
             {
                 scrollRepeatCount = 0;
             }
@@ -504,6 +512,38 @@ namespace Launcher
                 else
                 {
                     selectedIndex = GameItems.SelectedIndex + 1;
+                }
+            }
+            else if (e.Key == Key.NumPad4 || e.Key == Key.D || 
+                e.Key == Key.NumPad6 || e.Key == Key.G)
+            {
+                // Side movement (skip-alphabet)
+                var curSelectedIndex = GameItems.SelectedIndex;
+                var lastLetter = char.ToLower((GameItems.SelectedItem as GameElement).Name[0]);
+                var itemsToSelect = AvaliableGames.Select((ele, idx) => { return new { ele, idx }; });
+                if (e.Key == Key.NumPad4 || e.Key == Key.D)
+                {
+                    // Left
+                    selectedIndex =
+                        itemsToSelect
+                            .Where(ele => { return ele.idx < curSelectedIndex && char.ToLower(ele.ele.Name[0]) < lastLetter; })
+                            .Select(ele => { return ele.idx; })
+                            .LastOrDefault();
+                }
+                else
+                {
+                    // Right
+                    selectedIndex =
+                        itemsToSelect
+                            .SkipWhile(ele => { return ele.idx <= curSelectedIndex; })
+                            .Where(ele => { return char.ToLower(ele.ele.Name[0]) > lastLetter; })
+                            .Select(ele => { return ele.idx; })
+                            .FirstOrDefault();
+                    if (selectedIndex == 0)
+                    {
+                        // Ended up at default? Just go to the last value
+                        selectedIndex = AvaliableGames.Count - 1;
+                    }
                 }
             }
 

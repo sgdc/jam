@@ -36,9 +36,105 @@ namespace Launcher
         private DateTime lastScrollTime = DateTime.UtcNow;
         private int scrollRepeatCount = 0;
 
+        //XXX would much prefer a enumeration, but CompareExchange doesn't like enums
+        private const int GAME_EXEC_STATE_NOT_RUNNING = 0;
+        private const int GAME_EXEC_STATE_STARTING = 1;
+        private const int GAME_EXEC_STATE_RUNNING = 2;
+        private int gameRunningState = GAME_EXEC_STATE_NOT_RUNNING;
+
         private Logger log;
         private IDisposable versionUpdateTimer = null;
         private AudioController<CoreAudioDevice> audioController;
+
+        #region Configs
+
+        private static Config GameConfig;
+
+        static MainWindow()
+        {
+            Func<string, System.IO.StreamReader, Logger, object> id = (firstLine, sr, log) =>
+                {
+                    return firstLine;
+                };
+
+            #region Game Config
+
+            GameConfig = new Config(new ConfigParseOption
+            {
+                Name = "SupportedPlayers",
+                Parser = (firstLine, sr, log) =>
+                {
+                    int playerCount;
+                    if (int.TryParse(firstLine, out playerCount))
+                    {
+                        log.Info("Got player count: {0}", playerCount);
+                        if (playerCount < 2 || playerCount > 4)
+                        {
+                            log.Warn("Player count must be between 2 and 4");
+                        }
+                        return Math.Max(2, Math.Min(4, playerCount));
+                    }
+                    else
+                    {
+                        log.Warn("Could not parse player count: \"{0}\"", firstLine);
+                    }
+                    return null;
+                }
+            }, new ConfigParseOption
+            {
+                Name = "Title",
+                Parser = id
+            }, new ConfigParseOption
+            {
+                Name = "Description",
+                Parser = (firstLine, sr, log) =>
+                {
+                    var builder = new StringBuilder();
+                    var c = -1;
+                    do
+                    {
+                        if (builder.Length > 0)
+                        {
+                            builder.Append(Environment.NewLine);
+                            builder.Append(sr.ReadLine());
+                        }
+                        else
+                        {
+                            builder.Append(firstLine);
+                        }
+                        c = sr.Peek();
+                    } while (c != '[' && c > 0);
+                    return builder.ToString().TrimEnd();
+                }
+            }, new ConfigParseOption
+            {
+                Name = "Arguments",
+                Parser = id
+            }, new ConfigParseOption
+            {
+                Name = "Version",
+                Parser = (firstLine, sr, log) =>
+                {
+                    return string.IsNullOrWhiteSpace(firstLine) ? null : firstLine;
+                }
+            }, new ConfigParseOption
+            {
+                Name = "Volume",
+                Parser = (firstLine, sr, log) =>
+                {
+                    int volume;
+                    if (!int.TryParse(firstLine, out volume))
+                    {
+                        return null;
+                    }
+                    return volume;
+                }
+            });
+
+            #endregion
+        }
+
+        #endregion
 
         public MainWindow()
         {
@@ -326,74 +422,19 @@ namespace Launcher
                              */
 
                             log.Info("Loading info from file \"{0}\"", infoFile);
+                            GameConfig.Load(infoFile, log);
 
-                            using (var info = new System.IO.StreamReader(infoFile))
+                            if (GameConfig.ContainsKey("SupportedPlayers"))
                             {
-                                string line;
-                                while ((line = info.ReadLine()) != null)
-                                {
-                                    if (!string.IsNullOrWhiteSpace(line) && !line.TrimStart().StartsWith("%"))
-                                    {
-                                        switch (line.ToLower())
-                                        {
-                                            case "[supportedplayers]":
-                                                var tmpLine = info.ReadLine();
-                                                if (int.TryParse(tmpLine, out playerCount))
-                                                {
-                                                    log.Info("Got player count: {0}", playerCount);
-                                                    if (playerCount < 2 || playerCount > 4)
-                                                    {
-                                                        log.Warn("Player count must be between 2 and 4");
-                                                    }
-                                                    playerCount = Math.Max(2, Math.Min(4, playerCount));
-                                                }
-                                                else
-                                                {
-                                                    log.Warn("Could not parse player count: \"{0}\"", tmpLine);
-                                                }
-                                                break;
-                                            case "[title]":
-                                                name = info.ReadLine();
-                                                break;
-                                            case "[description]":
-                                                var builder = new StringBuilder();
-                                                var c = -1;
-                                                do
-                                                {
-                                                    if (builder.Length > 0)
-                                                    {
-                                                        builder.Append(Environment.NewLine);
-                                                    }
-                                                    builder.Append(info.ReadLine());
-                                                    c = info.Peek();
-                                                } while (c != '[' && c > 0);
-                                                desc = builder.ToString().TrimEnd();
-                                                break;
-                                            case "[arguments]":
-                                                args = info.ReadLine();
-                                                break;
-                                            case "[version]":
-                                                ver = info.ReadLine();
-                                                if (string.IsNullOrWhiteSpace(ver))
-                                                {
-                                                    ver = null;
-                                                }
-                                                break;
-                                            case "[volume]":
-                                                if (!int.TryParse(info.ReadLine(), out volume))
-                                                {
-                                                    volume = -1;
-                                                }
-                                                break;
-                                            default:
-                                                if (line.StartsWith("[") && line.EndsWith("]"))
-                                                {
-                                                    log.Info("Unknown Info key: \"{0}\"", line);
-                                                }
-                                                break;
-                                        }
-                                    }
-                                }
+                                playerCount = GameConfig.GetValue<int>("SupportedPlayers");
+                            }
+                            name = GameConfig.GetValue<string>("Title");
+                            desc = GameConfig.GetValue<string>("Description");
+                            args = GameConfig.GetValue<string>("Arguments");
+                            ver = GameConfig.GetValue<string>("Version");
+                            if (GameConfig.ContainsKey("Volume"))
+                            {
+                                volume = GameConfig.GetValue<int>("Volume");
                             }
                         }
                     }
@@ -566,6 +607,16 @@ namespace Launcher
 
         #endregion
 
+        public bool LoadingGame(GameElement element)
+        {
+            if (System.Threading.Interlocked.CompareExchange(ref gameRunningState, GAME_EXEC_STATE_STARTING, GAME_EXEC_STATE_NOT_RUNNING) != GAME_EXEC_STATE_NOT_RUNNING)
+            {
+                GameError(null, element, "Another game has been started already or is running");
+                return false;
+            }
+            return true;
+        }
+
         public void GameError(Exception err, GameElement element, string message)
         {
             if (err != null)
@@ -580,21 +631,23 @@ namespace Launcher
 
         public void GameRunning(GameElement element, Process game)
         {
-            log.Info("Starting {0}", element.Name);
-            if (GameExecuting)
+            if (System.Threading.Interlocked.CompareExchange(ref gameRunningState, GAME_EXEC_STATE_RUNNING, GAME_EXEC_STATE_STARTING) != GAME_EXEC_STATE_STARTING)
             {
                 // Should not happen
+                GameError(null, element, "Another game may have started or is running. Exiting to prevent deadlocking.");
                 try
                 {
                     game.Dispose();
                 }
                 catch (Exception e)
                 {
-                    GameError(e, element, "Another game is running, but the game to start refuses to exit");
+                    GameError(e, element, "Game to start refuses to exit");
                 }
             }
             else
             {
+                log.Info("Starting {0}", element.Name);
+
                 this.SetValue(GameExecutingProperty, true);
                 var processingTest = new System.Threading.Timer(process =>
                 {
@@ -620,6 +673,10 @@ namespace Launcher
                     if (exitedProcess.ExitCode != 0)
                     {
                         GameError(new System.ComponentModel.Win32Exception(exitedProcess.ExitCode), element, "Game didn't exit cleanly");
+                    }
+                    if (System.Threading.Interlocked.CompareExchange(ref gameRunningState, GAME_EXEC_STATE_NOT_RUNNING, GAME_EXEC_STATE_RUNNING) != GAME_EXEC_STATE_RUNNING)
+                    {
+                        GameError(null, element, "Launcher state was not running a game, but exit callback should only be invoked for a running game.");
                     }
                     this.Dispatcher.InvokeAsync(() => this.SetValue(GameExecutingProperty, false)).Wait();
                 };

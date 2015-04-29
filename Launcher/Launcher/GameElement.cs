@@ -149,25 +149,28 @@ namespace Launcher
             {
                 return new DelegateCommand(() =>
                 {
-                    var info = new ProcessStartInfo(ExeFile);
-                    info.UseShellExecute = true;
-                    info.WindowStyle = ProcessWindowStyle.Maximized;
-                    info.WorkingDirectory = System.IO.Path.GetDirectoryName(ExeFile);
-                    if (!string.IsNullOrWhiteSpace(args))
+                    if (ui.LoadingGame(this))
                     {
-                        info.Arguments = args;
-                    }
+                        var info = new ProcessStartInfo(ExeFile);
+                        info.UseShellExecute = true;
+                        info.WindowStyle = ProcessWindowStyle.Maximized;
+                        info.WorkingDirectory = System.IO.Path.GetDirectoryName(ExeFile);
+                        if (!string.IsNullOrWhiteSpace(args))
+                        {
+                            info.Arguments = args;
+                        }
 
-                    var game = new Process();
-                    game.StartInfo = info;
-                    game.EnableRaisingEvents = true;
-                    if (game.Start())
-                    {
-                        ui.GameRunning(this, game);
-                    }
-                    else
-                    {
-                        ui.GameError(null, this, "Could not start game");
+                        var game = new Process();
+                        game.StartInfo = info;
+                        game.EnableRaisingEvents = true;
+                        if (game.Start())
+                        {
+                            ui.GameRunning(this, game);
+                        }
+                        else
+                        {
+                            ui.GameError(null, this, "Could not start game");
+                        }
                     }
                 });
             }

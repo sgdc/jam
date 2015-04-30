@@ -1,7 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
-using System.Linq;
 using System.IO;
+using System.Linq;
 using NLog;
 
 namespace Launcher
@@ -81,7 +81,7 @@ namespace Launcher
             return configValues.ContainsKey(key);
         }
 
-        public T GetValue<T>(string key)
+        public T GetValue<T>(string key, T def = default(T))
         {
             if (configValues.ContainsKey(key))
             {
@@ -91,7 +91,7 @@ namespace Launcher
                     return (T)value;
                 }
             }
-            return default(T);
+            return def;
         }
 
         public object GetValueRaw(string key)

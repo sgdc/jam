@@ -10,17 +10,12 @@ using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
-using NLog;
 using AudioSwitcher.AudioApi;
 using AudioSwitcher.AudioApi.CoreAudio;
+using NLog;
 
 namespace Launcher
 {
-    /* XXX Addition:
-     * Count the number of times a game has been played
-     * Quick-find? Games are divided by title's first letter, and each one has a header for that letter. The user can search by letter to quickly go through list (assuming there's many games)
-     */
-
     /// <summary>
     /// Interaction logic for MainWindow.xaml
     /// </summary>
@@ -31,10 +26,25 @@ namespace Launcher
         public static readonly DependencyProperty AvaliableGamesProperty = DependencyProperty.Register("AvaliableGames", typeof(ObservableCollection<GameElement>), typeof(MainWindow), new PropertyMetadata(new ObservableCollection<GameElement>()));
         public static readonly DependencyProperty GameExecutingProperty = DependencyProperty.Register("GameExecuting", typeof(bool), typeof(MainWindow), new PropertyMetadata(false));
 
-        private const double SCROLL_REPEAT_DELAY = 250.0; // 250 ms between scrolling when pressing and holding a key
-        private const int DAYS_BEFORE_VERSION_NOTIFICATION_RESET = 14; // If game is new or updated, how many days before it is no longer "updated" or "new"?
+        private static int versionNotificationReset; // (Days) If game is new or updated, how many days before it is no longer "updated" or "new"?
+
+        #region Input Variables
+
+        private const int KEYS_START = 0;
+        private const int KEYS_START_OFFSET = KEYS_START + 1;
+        private const int KEYS_START_COUNT = KEYS_START_OFFSET + 1;
+        private const int KEYS_UP = KEYS_START_OFFSET + 1;
+        private const int KEYS_DOWN = KEYS_UP + 1;
+        private const int KEYS_LEFT_RIGHT_INDEX_START = KEYS_DOWN + 1;
+        private const int KEYS_LEFT = KEYS_DOWN + 1;
+        private const int KEYS_RIGHT = KEYS_LEFT + 1;
+
+        private double scrollRepeatDelay; // ms between scrolling when pressing and holding a key
         private DateTime lastScrollTime = DateTime.UtcNow;
         private int scrollRepeatCount = 0;
+        private Key[][] inputKeys;
+
+        #endregion
 
         //XXX would much prefer a enumeration, but CompareExchange doesn't like enums
         private const int GAME_EXEC_STATE_NOT_RUNNING = 0;
@@ -49,13 +59,14 @@ namespace Launcher
         #region Configs
 
         private static Config GameConfig;
+        private static Config LauncherConfig;
 
         static MainWindow()
         {
             Func<string, System.IO.StreamReader, Logger, object> id = (firstLine, sr, log) =>
-                {
-                    return firstLine;
-                };
+            {
+                return firstLine;
+            };
 
             #region Game Config
 
@@ -132,16 +143,128 @@ namespace Launcher
             });
 
             #endregion
+
+            #region Launcher Config
+
+            Func<string, System.IO.StreamReader, Logger, object> keyArrayParser = (firstLine, sr, log) =>
+            {
+                var keys = firstLine.Split(new char[] { ',' }, StringSplitOptions.RemoveEmptyEntries);
+                List<Key> keyArray = new List<Key>();
+                foreach (var key in keys)
+                {
+                    Key parsedKey;
+                    if (Enum.TryParse(key, out parsedKey))
+                    {
+                        keyArray.Add(parsedKey);
+                    }
+                    else
+                    {
+                        log.Warn("Could not parse '{0}', unknown key.", key);
+                    }
+                }
+                return keyArray.Count > 0 ? keyArray.ToArray() : null;
+            };
+
+            LauncherConfig = new Config(new ConfigParseOption
+            {
+                Name = "PlayerStartKeys",
+                Parser = keyArrayParser
+            }, new ConfigParseOption
+            {
+                Name = "PlayerStartKeyOffsets",
+                Parser = keyArrayParser
+            }, new ConfigParseOption
+            {
+                Name = "LeftMovementKeys",
+                Parser = keyArrayParser
+            }, new ConfigParseOption
+            {
+                Name = "RightMovementKeys",
+                Parser = keyArrayParser
+            }, new ConfigParseOption
+            {
+                Name = "UpMovementKeys",
+                Parser = keyArrayParser
+            }, new ConfigParseOption
+            {
+                Name = "DownMovementKeys",
+                Parser = keyArrayParser
+            }, new ConfigParseOption
+            {
+                Name = "ScrollRepeatDelay",
+                Parser = (firstLine, sr, log) =>
+                {
+                    double result;
+                    if (!double.TryParse(firstLine, out result))
+                    {
+                        log.Warn("Could not parse scroll repeat delay: {0}", firstLine);
+                        return null;
+                    }
+                    return result;
+                }
+            }, new ConfigParseOption
+            {
+                Name = "DaysBeforeVersionNotificationReset",
+                Parser = (firstLine, sr, log) =>
+                {
+                    int result;
+                    if (!int.TryParse(firstLine, out result))
+                    {
+                        log.Warn("Could not parse the number of days before the version notification was reset: {0}", firstLine);
+                        return null;
+                    }
+                    return result;
+                }
+            });
+
+            #endregion
         }
 
         #endregion
 
         public MainWindow()
         {
+            // Get log. First thing
             log = LogManager.GetLogger("launcher");
 
             // Make sure the UI knows where to get data bindings from (yes, this is weird... I thought it should've been implicit, but doesn't seem to be the case)
             this.DataContext = this;
+
+            #region Launcher Config
+
+            // Load config
+            var configPath = System.IO.Path.Combine(Environment.CurrentDirectory, "Config.ini");
+            if (System.IO.File.Exists(configPath))
+            {
+                log.Info("Loading launcher config from '%s'", configPath);
+                LauncherConfig.Load(configPath, log);
+            }
+            // Default keys are associated with Page 6 of X-Arcade Manual.
+            Key[] configStartKeys = LauncherConfig.GetValue<Key[]>("PlayerStartKeys", new Key[] { Key.D1, Key.D2, Key.D3, Key.D4 });
+            Key[] configStartOffsetKeys = LauncherConfig.GetValue<Key[]>("PlayerStartKeyOffsets", new Key[] { Key.D0 });
+            Key[] configLeftKeys = LauncherConfig.GetValue<Key[]>("LeftMovementKeys", new Key[] { Key.NumPad4, Key.D });
+            Key[] configRightKeys = LauncherConfig.GetValue<Key[]>("RightMovementKeys", new Key[] { Key.NumPad6, Key.G });
+            Key[] configUpKeys = LauncherConfig.GetValue<Key[]>("UpMovementKeys", new Key[] { Key.NumPad8, Key.R });
+            Key[] configDownKeys = LauncherConfig.GetValue<Key[]>("DownMovementKeys", new Key[] { Key.NumPad2, Key.F });
+
+            if (configStartOffsetKeys.Length < configStartKeys.Length)
+            {
+                configStartOffsetKeys = configStartOffsetKeys.Concat(Enumerable.Repeat(configStartOffsetKeys[0], configStartKeys.Length - configStartOffsetKeys.Length)).ToArray();
+            }
+            inputKeys = new Key[][]
+            {
+                configStartKeys,
+                configStartOffsetKeys,
+                configUpKeys,
+                configDownKeys,
+                configLeftKeys,
+                configRightKeys
+            };
+
+            scrollRepeatDelay = LauncherConfig.GetValue<double>("ScrollRepeatDelay", 250.0);
+            versionNotificationReset = LauncherConfig.GetValue<int>("DaysBeforeVersionNotificationReset", 14);
+
+            #endregion
 
             // Initialize the UI
             log.Info("Setting up UI");
@@ -253,7 +376,7 @@ namespace Launcher
             }
 
             // Check games to update
-            var diff = TimeSpan.FromDays(DAYS_BEFORE_VERSION_NOTIFICATION_RESET);
+            var diff = TimeSpan.FromDays(versionNotificationReset);
             for (var i = 0; i < gamesToUpdate.Count; i++)
             {
                 var element = gamesToUpdate.ElementAt(i);
@@ -424,18 +547,12 @@ namespace Launcher
                             log.Info("Loading info from file \"{0}\"", infoFile);
                             GameConfig.Load(infoFile, log);
 
-                            if (GameConfig.ContainsKey("SupportedPlayers"))
-                            {
-                                playerCount = GameConfig.GetValue<int>("SupportedPlayers");
-                            }
+                            playerCount = GameConfig.GetValue<int>("SupportedPlayers", playerCount);
                             name = GameConfig.GetValue<string>("Title");
                             desc = GameConfig.GetValue<string>("Description");
                             args = GameConfig.GetValue<string>("Arguments");
                             ver = GameConfig.GetValue<string>("Version");
-                            if (GameConfig.ContainsKey("Volume"))
-                            {
-                                volume = GameConfig.GetValue<int>("Volume");
-                            }
+                            volume = GameConfig.GetValue<int>("Volume", volume);
                         }
                     }
                     if (name == null || desc == null || ver == null)
@@ -497,12 +614,13 @@ namespace Launcher
 
         private void ItemListKeyUpHandler(object sender, KeyEventArgs e)
         {
-            if (e.Key == Key.D1 || e.Key == Key.D2 || e.Key == Key.D3 || e.Key == Key.D4)
+            int index;
+            if ((index = Array.IndexOf(inputKeys[KEYS_START], e.Key)) >= 0)
             {
                 var game = GameItems.SelectedItem as GameElement;
                 if (game.Execute.CanExecute(game))
                 {
-                    var playerCount = e.Key - Key.D0;
+                    var playerCount = e.Key - inputKeys[KEYS_START_OFFSET][index];
                     if (playerCount > 0 && playerCount <= game.SupportedPlayerCount)
                     {
                         var playerConf = System.IO.Path.Combine(game.ExeFolder, "Startup.cfg");
@@ -520,8 +638,8 @@ namespace Launcher
                     GameError(null, game, "Game cannot be run");
                 }
             }
-            if (e.Key == Key.NumPad8 || e.Key == Key.R || e.Key == Key.NumPad2 || e.Key == Key.F ||
-                e.Key == Key.NumPad4 || e.Key == Key.D || e.Key == Key.NumPad6 || e.Key == Key.G)
+            // Check all movement keys to see if any were touched. If so, then reset scroll repeat
+            if (inputKeys.Skip(KEYS_START_COUNT).SelectMany(keys => keys).Contains(e.Key))
             {
                 scrollRepeatCount = 0;
             }
@@ -531,7 +649,7 @@ namespace Launcher
         {
             // Do everything to this index, so we can make sure the list scrolls...
             int? selectedIndex = null;
-            if (e.Key == Key.NumPad8 || e.Key == Key.R)
+            if (Array.IndexOf(inputKeys[KEYS_UP], e.Key) >= 0)
             {
                 // Up
                 if (GameItems.SelectedIndex == 0)
@@ -543,7 +661,7 @@ namespace Launcher
                     selectedIndex = GameItems.SelectedIndex - 1;
                 }
             }
-            else if (e.Key == Key.NumPad2 || e.Key == Key.F)
+            else if (Array.IndexOf(inputKeys[KEYS_DOWN], e.Key) >= 0)
             {
                 // Down
                 if (GameItems.SelectedIndex == AvaliableGames.Count - 1)
@@ -555,14 +673,13 @@ namespace Launcher
                     selectedIndex = GameItems.SelectedIndex + 1;
                 }
             }
-            else if (e.Key == Key.NumPad4 || e.Key == Key.D || 
-                e.Key == Key.NumPad6 || e.Key == Key.G)
+            else if (inputKeys.Skip(KEYS_LEFT_RIGHT_INDEX_START).SelectMany(keys => keys).Contains(e.Key))
             {
                 // Side movement (skip-alphabet)
                 var curSelectedIndex = GameItems.SelectedIndex;
                 var lastLetter = char.ToLower((GameItems.SelectedItem as GameElement).Name[0]);
                 var itemsToSelect = AvaliableGames.Select((ele, idx) => { return new { ele, idx }; });
-                if (e.Key == Key.NumPad4 || e.Key == Key.D)
+                if (Array.IndexOf(inputKeys[KEYS_LEFT], e.Key) >= 0)
                 {
                     // Left
                     selectedIndex =
@@ -589,7 +706,7 @@ namespace Launcher
             }
 
             // If we have an index, then we want to scroll if 1). This is a unique scoll press 2). The repeat of scolling has exceeded the delay we have. Repeat scrolling speeds up over time.
-            if (selectedIndex.HasValue && (!e.IsRepeat || (DateTime.UtcNow - lastScrollTime).Milliseconds >= SCROLL_REPEAT_DELAY / Math.Log(scrollRepeatCount + Math.E)))
+            if (selectedIndex.HasValue && (!e.IsRepeat || (DateTime.UtcNow - lastScrollTime).Milliseconds >= scrollRepeatDelay / Math.Log(scrollRepeatCount + Math.E)))
             {
                 lastScrollTime = DateTime.UtcNow;
                 GameItems.SelectedIndex = selectedIndex.Value;
@@ -606,6 +723,8 @@ namespace Launcher
         }
 
         #endregion
+
+        #region Game Launch State Handlers
 
         public bool LoadingGame(GameElement element)
         {
@@ -682,6 +801,8 @@ namespace Launcher
                 };
             }
         }
+
+        #endregion
 
         // UI properties
         public Visibility NoGamesVisibility

@@ -73,6 +73,7 @@
     </Compile>
     <Compile Include="Config.cs" />
     <Compile Include="GameElement.cs" />
+    <Compile Include="InputHook.cs" />
     <Compile Include="MainWindow.xaml.cs">
       <DependentUpon>MainWindow.xaml</DependentUpon>
       <SubType>Code</SubType>

@@ -56,6 +56,12 @@ namespace Launcher
         private IDisposable versionUpdateTimer = null;
         private AudioController<CoreAudioDevice> audioController;
 
+        private InputHook hook;
+        private IDisposable hookTimer = null;
+
+        private TimeSpan gameRespondingPolling;
+        private TimeSpan closeGameOnNoInputTimeout;
+
         #region Configs
 
         private static Config GameConfig;
@@ -69,6 +75,18 @@ namespace Launcher
             };
 
             #region Game Config
+
+            /*
+             * Format ([key]
+             *         value
+             *         % Comment):
+             * - [optional] int "SupportedPlayers" <supported player count. Between 2 and 4>
+             * - string "Title" <game name>
+             * - [optional] string "Description" <game description, can be multiple lines>
+             * - [optional] string "Arguments" <game arguments>
+             * - [optional] string "Version" <game version X.X.X.X>
+             * - [optional] int "Volume" <game volume vetween 0 and 100>
+             */
 
             GameConfig = new Config(new ConfigParseOption
             {
@@ -146,6 +164,26 @@ namespace Launcher
 
             #region Launcher Config
 
+            /*
+             * Everything is optional
+             * 
+             * Format ([key]
+             *         value
+             *         % Comment):
+             * - Key[,Key,...] "PlayerStartKeys" <The keys used to start a game, ordered: 1 player, 2 player, 3 player, etc.>
+             * - Key[,Key,...] "PlayerStartKeyOffsets" <Used in conjunction with PlayerStartKeys, it is used to subtract the key value from the start key to get the player number. 
+             *                  So if '1' is pressed, and the offset is '0', it will indicate 1 player. The first value will be used if not enough offsets exist for all keys>
+             * - Key[,Key,...] "LeftMovementKeys" <Keys used to indicate "move left" to the launcher UI>
+             * - Key[,Key,...] "RightMovementKeys" <Keys used to indicate "move right" to the launcher UI>
+             * - Key[,Key,...] "UpMovementKeys" <Keys used to indicate "move up" to the launcher UI>
+             * - Key[,Key,...] "DownMovementKeys" <Keys used to indicate "move down" to the launcher UI>
+             * - double "ScrollRepeatDelay" <How long to delay scrolling, in milliseconds, without a new key input to scroll. If short, then it will very rapidly start to scroll 
+             *                  through all games. Else, it will take a while>
+             * - double "DaysBeforeVersionNotificationReset" <How long, in days, before notifcations on new/updated games are reset so they don't indicate new or updated.>
+             * - TimeSpan "GameRespondingCheck" <How often to check if the game is responding. A 2.5 sec delay occurs before this runs. Look at TimeSpan.Parse remarks on MSDN for format. Must be >= 0.>
+             * - TimeSpan "CloseGameAfterNoInputTimeout" <How long before a game is closed from lack of input, so the Launcher shows again. Look at TimeSpan.Parse remarks on MSDN for format. Must be >= 0.>
+             */
+
             Func<string, System.IO.StreamReader, Logger, object> keyArrayParser = (firstLine, sr, log) =>
             {
                 var keys = firstLine.Split(new char[] { ',' }, StringSplitOptions.RemoveEmptyEntries);
@@ -163,6 +201,15 @@ namespace Launcher
                     }
                 }
                 return keyArray.Count > 0 ? keyArray.ToArray() : null;
+            };
+            Func<string, System.IO.StreamReader, Logger, object> timespanParser = (firstLine, sr, log) =>
+            {
+                TimeSpan span;
+                if (TimeSpan.TryParse(firstLine, out span) && span > TimeSpan.Zero)
+                {
+                    return span;
+                }
+                return null;
             };
 
             LauncherConfig = new Config(new ConfigParseOption
@@ -215,6 +262,14 @@ namespace Launcher
                     }
                     return result;
                 }
+            }, new ConfigParseOption
+            {
+                Name = "GameRespondingCheck",
+                Parser = timespanParser
+            }, new ConfigParseOption
+            {
+                Name = "CloseGameAfterNoInputTimeout",
+                Parser = timespanParser
             });
 
             #endregion
@@ -229,6 +284,9 @@ namespace Launcher
 
             // Make sure the UI knows where to get data bindings from (yes, this is weird... I thought it should've been implicit, but doesn't seem to be the case)
             this.DataContext = this;
+
+            // Setup input hook
+            hook = new InputHook();
 
             #region Launcher Config
 
@@ -264,6 +322,9 @@ namespace Launcher
             scrollRepeatDelay = LauncherConfig.GetValue<double>("ScrollRepeatDelay", 250.0);
             versionNotificationReset = LauncherConfig.GetValue<int>("DaysBeforeVersionNotificationReset", 14);
 
+            gameRespondingPolling = LauncherConfig.GetValue<TimeSpan>("GameRespondingCheck", TimeSpan.FromMilliseconds(5000));
+            closeGameOnNoInputTimeout = LauncherConfig.GetValue<TimeSpan>("CloseGameAfterNoInputTimeout", TimeSpan.FromMinutes(8));
+
             #endregion
 
             // Initialize the UI
@@ -276,6 +337,7 @@ namespace Launcher
             // Search for games
             Task.Factory.StartNew(new Func<GameElement[]>(LoadGames)).ContinueWith(task =>
             {
+                // Build game list and set visibility
                 var elements = (ObservableCollection<GameElement>)this.GetValue(AvaliableGamesProperty);
                 var needsUpdateTimer = false;
                 foreach (var game in task.Result)
@@ -317,9 +379,14 @@ namespace Launcher
         {
             log.Info("Shutting down");
             base.OnClosing(e);
+            hook.Dispose();
             if (versionUpdateTimer != null)
             {
                 versionUpdateTimer.Dispose();
+            }
+            if (hookTimer != null)
+            {
+                hookTimer.Dispose();
             }
         }
 
@@ -334,6 +401,22 @@ namespace Launcher
             catch(Exception exp)
             {
                 log.Warn("Error changing system volume for game", exp);
+            }
+        }
+
+        private void GameInputTimer(object state)
+        {
+            // On input timer's timout, close the main window
+            var pair = (KeyValuePair<GameElement, Process>)state;
+
+            log.Warn("No input recieved for {0}, returning to launcher", pair.Key.Name);
+            try
+            {
+                pair.Value.CloseMainWindow();
+            }
+            catch
+            {
+                log.Error("Could not request closing the main window of {0}", pair.Key.Name);
             }
         }
 
@@ -532,18 +615,6 @@ namespace Launcher
                         var infoFile = infoFiles.FirstOrDefault();
                         if (infoFile != null)
                         {
-                            /*
-                             * Format ([key]
-                             *         value
-                             *         % Comment):
-                             * - [optional] int "SupportedPlayers" <supported player count. Between 2 and 4>
-                             * - string "Title" <game name>
-                             * - [optional] string "Description" <game description, can be multiple lines>
-                             * - [optional] string "Arguments" <game arguments>
-                             * - [optional] string "Version" <game version X.X.X.X>
-                             * - [optional] int "Volume" <game volume vetween 0 and 100>
-                             */
-
                             log.Info("Loading info from file \"{0}\"", infoFile);
                             GameConfig.Load(infoFile, log);
 
@@ -647,6 +718,15 @@ namespace Launcher
 
         private void ItemListKeyDownHandler(object sender, KeyEventArgs e)
         {
+            // Prevent opening the alt-space menu (which lets you close the app).
+            // Also disables the "alt" keys in general (though alt-F4 still works), as it's possible to tap alt, then after a few seconds press space and for the menu to open
+            if ((e.SystemKey == Key.Space && (e.KeyboardDevice.IsKeyDown(Key.LeftAlt) || e.KeyboardDevice.IsKeyDown(Key.RightAlt))) ||
+                (e.SystemKey == Key.LeftAlt || e.SystemKey == Key.RightAlt))
+            {
+                e.Handled = true;
+                return;
+            }
+
             // Do everything to this index, so we can make sure the list scrolls...
             int? selectedIndex = null;
             if (Array.IndexOf(inputKeys[KEYS_UP], e.Key) >= 0)
@@ -766,16 +846,27 @@ namespace Launcher
             else
             {
                 log.Info("Starting {0}", element.Name);
-
                 this.SetValue(GameExecutingProperty, true);
+
+                // Timed controls
+                EventHandler<Key> inputRecieved = (e, key) =>
+                {
+                    // On input, simply reset the timer
+                    if (hookTimer != null)
+                    {
+                        ((System.Threading.Timer)hookTimer).Change(closeGameOnNoInputTimeout, System.Threading.Timeout.InfiniteTimeSpan);
+                    }
+                };
                 var processingTest = new System.Threading.Timer(process =>
                 {
+                    // Test if process is responding. Kill it if it isn't.
                     var runningProcess = (Process)process;
                     if (!runningProcess.Responding) //XXX Actual crash isn't triggering this...
                     {
                         log.Info("{0} stopped responding", element.Name);
                         try
                         {
+                            //XXX unsure if Kill will still call the Exited handler. If not, then input hook, game running state, and game executing property need to be set here too (so it should be refactored to seperate function)
                             runningProcess.Kill();
                         }
                         catch (Exception e)
@@ -783,22 +874,53 @@ namespace Launcher
                             GameError(e, element, "Process stopped responding");
                         }
                     }
-                }, game, 1000, 5000); // ms delay of first run, ms repeat interval
+                }, game, TimeSpan.FromMilliseconds(2500), gameRespondingPolling); // delay of first run (let it start for 2.5 sec, then poll), repeat interval
+
+                // Exit handler
                 game.Exited += (s, e) =>
                 {
                     log.Info("{0} exited", element.Name);
+
+                    // Shutdown timed controls
                     processingTest.Dispose();
+                    if (hookTimer != null)
+                    {
+                        hookTimer.Dispose();
+                        hookTimer = null;
+                    }
+
+                    // Test exit results
                     var exitedProcess = (Process)s;
                     if (exitedProcess.ExitCode != 0)
                     {
                         GameError(new System.ComponentModel.Win32Exception(exitedProcess.ExitCode), element, "Game didn't exit cleanly");
                     }
+
+                    // Unhook input
+                    if (!hook.Unhook())
+                    {
+                        log.Warn("{0} could not be unhooked from keyboard tracking.", element.Name);
+                    }
+                    hook.KeyDown -= inputRecieved;
+
+                    // Update game running state
                     if (System.Threading.Interlocked.CompareExchange(ref gameRunningState, GAME_EXEC_STATE_NOT_RUNNING, GAME_EXEC_STATE_RUNNING) != GAME_EXEC_STATE_RUNNING)
                     {
                         GameError(null, element, "Launcher state was not running a game, but exit callback should only be invoked for a running game.");
                     }
                     this.Dispatcher.InvokeAsync(() => this.SetValue(GameExecutingProperty, false)).Wait();
                 };
+
+                // Hook game input
+                if (hook.Hookup(game))
+                {
+                    hook.KeyDown += inputRecieved;
+                    hookTimer = new System.Threading.Timer(GameInputTimer, new KeyValuePair<GameElement, Process>(element, game), closeGameOnNoInputTimeout, System.Threading.Timeout.InfiniteTimeSpan);
+                }
+                else
+                {
+                    log.Warn("{0} could not be hooked for keyboard tracking.", element.Name);
+                }
             }
         }
 

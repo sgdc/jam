@@ -119,9 +119,8 @@ namespace Launcher
             // Indicates if the started process is the same size (32 bit, 64 bit) as the currently running process.
 
             error = null;
-            if (Environment.Is64BitProcess == IsWin64Process(proc))
+            //if (Environment.Is64BitProcess == IsWin64Process(proc)) // Liteweight test completed. In order for this to work, the main module needs to be retrieved
             {
-                // Liteweight test completed. In order for this to work, the main module needs to be retrieved
                 try
                 {
                     using (var mod = proc.MainModule)

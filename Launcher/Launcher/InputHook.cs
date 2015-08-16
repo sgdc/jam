@@ -30,6 +30,10 @@ namespace Launcher
         [DllImport("kernel32.dll", CharSet = CharSet.Auto, SetLastError = true)]
         private static extern IntPtr GetModuleHandle(string lpModuleName);
 
+        [DllImport("kernel32.dll", SetLastError = true, CallingConvention = CallingConvention.Winapi)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool IsWow64Process(IntPtr process, [Out] out bool wow64Process);
+
         #endregion
 
         private IntPtr HookCallback(int nCode, IntPtr wParam, IntPtr lParam)
@@ -44,6 +48,26 @@ namespace Launcher
                 }
             }
             return CallNextHookEx(hookId, nCode, wParam, lParam);
+        }
+
+        private static bool IsWin64Process(Process proc)
+        {
+            // http://stackoverflow.com/questions/1953377/how-to-know-a-process-is-32-bit-or-64-bit-programmatically
+            if ((Environment.OSVersion.Version.Major > 5) || ((Environment.OSVersion.Version.Major == 5) && (Environment.OSVersion.Version.Minor >= 1)))
+            {
+                try
+                {
+                    bool retVal;
+
+                    return IsWow64Process(proc.Handle, out retVal) && retVal;
+                }
+                catch
+                {
+                    return false; // access is denied to the process
+                }
+            }
+
+            return false; // not on 64-bit Windows
         }
 
         #region Public
@@ -88,6 +112,29 @@ namespace Launcher
             {
                 UnhookWindowsHookEx(hookId);
             }
+        }
+
+        public static bool CanHookProcess(Process proc, out Exception error)
+        {
+            // Indicates if the started process is the same size (32 bit, 64 bit) as the currently running process.
+
+            error = null;
+            if (Environment.Is64BitProcess == IsWin64Process(proc))
+            {
+                // Liteweight test completed. In order for this to work, the main module needs to be retrieved
+                try
+                {
+                    using (var mod = proc.MainModule)
+                    {
+                        return true;
+                    }
+                }
+                catch (Exception e)
+                {
+                    error = e;
+                }
+            }
+            return false;
         }
 
         #endregion

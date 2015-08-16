@@ -101,6 +101,7 @@ namespace Launcher
         public string ExeFolder { get; private set; }
         public int SupportedPlayerCount { get; private set; }
         public int DesiredVolume { get; set; }
+        public bool KeyHooksEnabled { get; set; }
 
         public Visibility NewGameVisibility
         {

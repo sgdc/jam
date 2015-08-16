@@ -77,6 +77,8 @@ namespace Launcher
             #region Game Config
 
             /*
+             * "*info*.ini
+             * 
              * Format ([key]
              *         value
              *         % Comment):
@@ -165,6 +167,8 @@ namespace Launcher
             #region Launcher Config
 
             /*
+             * Config.ini
+             * 
              * Everything is optional
              * 
              * Format ([key]
@@ -182,6 +186,10 @@ namespace Launcher
              * - double "DaysBeforeVersionNotificationReset" <How long, in days, before notifcations on new/updated games are reset so they don't indicate new or updated.>
              * - TimeSpan "GameRespondingCheck" <How often to check if the game is responding. A 2.5 sec delay occurs before this runs. Look at TimeSpan.Parse remarks on MSDN for format. Must be >= 0.>
              * - TimeSpan "CloseGameAfterNoInputTimeout" <How long before a game is closed from lack of input, so the Launcher shows again. Look at TimeSpan.Parse remarks on MSDN for format. Must be >= 0.>
+             * - Folder[,Folder,...] "DisableKeyboardHookGames" <Don't use keyboard hooks on the following games>
+             * - bool "DisableKeyboardHook" <Don't use keyboard hooks on any game>
+             * - bool "AlwaysLogGameHookCompatability" <Always test keyboard hook compatability and log failures. Ignores DisableKeyboardHook and DisableKeyboardHookGames, but if hooks are disabled for a game(s), it will not enable hooks. This could crash some games>
+             * - bool "SkipGameHookCompatabilityCheck" <If hooks are enabled, skip the compatability check. This could cause the launcher, game, or both to crash. Ignores AlwaysLogGameHookCompatability>
              */
 
             Func<string, System.IO.StreamReader, Logger, object> keyArrayParser = (firstLine, sr, log) =>
@@ -210,6 +218,33 @@ namespace Launcher
                     return span;
                 }
                 return null;
+            };
+            Func<string, System.IO.StreamReader, Logger, object> boolParser = (firstLine, sr, log) =>
+            {
+                bool val;
+                if (Boolean.TryParse(firstLine, out val))
+                {
+                    return val;
+                }
+                return null;
+            };
+            Func<string, System.IO.StreamReader, Logger, object> stringArrayParser = (firstLine, sr, log) =>
+            {
+                var strings = firstLine.Split(new char[] { ',' }, StringSplitOptions.RemoveEmptyEntries);
+                List<string> stringArray = new List<string>();
+                foreach (var str in strings)
+                {
+                    string stringValue = str.Trim();
+                    if (string.IsNullOrEmpty(stringValue))
+                    {
+                        log.Warn("Could not parse '{0}', string is null, empty, or whitespace.", stringValue);
+                    }
+                    else
+                    {
+                        stringArray.Add(stringValue);
+                    }
+                }
+                return stringArray.Count > 0 ? stringArray.ToArray() : null;
             };
 
             LauncherConfig = new Config(new ConfigParseOption
@@ -270,6 +305,22 @@ namespace Launcher
             {
                 Name = "CloseGameAfterNoInputTimeout",
                 Parser = timespanParser
+            }, new ConfigParseOption
+            {
+                Name = "DisableKeyboardHookGames",
+                Parser = stringArrayParser
+            }, new ConfigParseOption
+            {
+                Name = "DisableKeyboardHook",
+                Parser = boolParser
+            }, new ConfigParseOption
+            {
+                Name = "AlwaysLogGameHookCompatability",
+                Parser = boolParser
+            }, new ConfigParseOption
+            {
+                Name = "SkipGameHookCompatabilityCheck",
+                Parser = boolParser
             });
 
             #endregion
@@ -400,7 +451,7 @@ namespace Launcher
             }
             catch(Exception exp)
             {
-                log.Warn("Error changing system volume for game", exp);
+                log.Warn(exp, "Error changing system volume for game");
             }
         }
 
@@ -553,6 +604,12 @@ namespace Launcher
             {
                 return new GameElement[0];
             }
+            var enableKeyboardHook = !LauncherConfig.GetValue<bool>("DisableKeyboardHook");
+            if (!enableKeyboardHook)
+            {
+                log.Info("Keyboard hook is disabled");
+            }
+
             var games = new List<GameElement>();
             var gameNames = new HashSet<string>();
             foreach (var dir in System.IO.Directory.EnumerateDirectories(gamePath))
@@ -659,6 +716,16 @@ namespace Launcher
                         if (volume >= 0 && volume <= 100)
                         {
                             game.DesiredVolume = volume;
+                        }
+                        if (enableKeyboardHook)
+                        {
+                            var gameFolder = System.IO.Path.GetFileName(dir);
+                            var disableGameFolder = LauncherConfig.GetValue<string[]>("DisableKeyboardHookGames", new string[0]);
+
+                            if (!disableGameFolder.Contains(gameFolder))
+                            {
+                                game.KeyHooksEnabled = true;
+                            }
                         }
                         games.Add(game);
                     }
@@ -820,13 +887,61 @@ namespace Launcher
         {
             if (err != null)
             {
-                log.Error(string.Format("Error with {0}: {1}", element.Name, message), err);
+                log.Error(err, "Error with {0}: {1}", element.Name, message);
             }
             else
             {
                 log.Warn("Issue with {0}: {1}", element.Name, message);
             }
         }
+
+        #region GameRunning Helper Functions
+
+        private bool CanUseKeyboardHook(GameElement element, Process game)
+        {
+            if (!element.KeyHooksEnabled && !LauncherConfig.GetValue<bool>("AlwaysLogGameHookCompatability"))
+            {
+                // If we don't always want to log compatability, and we don't have hooks enabled, early exit
+                return false;
+            }
+            else if (element.KeyHooksEnabled && LauncherConfig.GetValue<bool>("SkipGameHookCompatabilityCheck"))
+            {
+                // If we want to skip compatability checks, and key hooks are enabled, then (try) to use them
+                return true;
+            }
+            Exception hookProcessError;
+            bool canUseKeyboardHook = InputHook.CanHookProcess(game, out hookProcessError);
+            if (!canUseKeyboardHook)
+            {
+                if (hookProcessError != null)
+                {
+                    var we = hookProcessError as System.ComponentModel.Win32Exception;
+                    if (we != null && (uint)we.HResult == 0x80004005) //XXX this value corisponds to "unspecified error", but given the context, it seems to always correlate to "32 bit launcher, 64 bit game. Can't use together"
+                    {
+                        log.Warn(we, "Launcher is running as a 32 bit process and the game ({0}) is running as a 64 bit process. Keyboard tracking can't be used between the two. Try running the launcher as a 64 bit process.", element.Name);
+                    }
+                    else
+                    {
+                        log.Warn(hookProcessError, "{0}'s process is incompatible with the launcher's keyboard tracking system. View exception and make ticket so it can be looked at.", element.Name);
+                    }
+                }
+                else
+                {
+                    log.Warn("{0} could not be hooked for keyboard tracking because it does not match the launcher's process size: Launcher {1} 64 bit, Game {2} 64 bit.",
+                        element.Name,
+                        (Environment.Is64BitProcess ? "is" : "is not"),
+                        (canUseKeyboardHook ? "is" : "is not"));
+                }
+            }
+            else if (LauncherConfig.GetValue<bool>("AlwaysLogGameHookCompatability"))
+            {
+                // If we always want to log the result, then log success.
+                log.Info("{0} can use keyboard tracking.", element.Name);
+            }
+            return canUseKeyboardHook && element.KeyHooksEnabled;
+        }
+
+        #endregion
 
         public void GameRunning(GameElement element, Process game)
         {
@@ -847,6 +962,8 @@ namespace Launcher
             {
                 log.Info("Starting {0}", element.Name);
                 this.SetValue(GameExecutingProperty, true);
+
+                bool useKeyboardHook = CanUseKeyboardHook(element, game);
 
                 // Timed controls
                 EventHandler<Key> inputRecieved = (e, key) =>
@@ -896,12 +1013,15 @@ namespace Launcher
                         GameError(new System.ComponentModel.Win32Exception(exitedProcess.ExitCode), element, "Game didn't exit cleanly");
                     }
 
-                    // Unhook input
-                    if (!hook.Unhook())
+                    if (useKeyboardHook)
                     {
-                        log.Warn("{0} could not be unhooked from keyboard tracking.", element.Name);
+                        // Unhook input
+                        if (!hook.Unhook())
+                        {
+                            log.Warn("{0} could not be unhooked from keyboard tracking.", element.Name);
+                        }
+                        hook.KeyDown -= inputRecieved;
                     }
-                    hook.KeyDown -= inputRecieved;
 
                     // Update game running state
                     if (System.Threading.Interlocked.CompareExchange(ref gameRunningState, GAME_EXEC_STATE_NOT_RUNNING, GAME_EXEC_STATE_RUNNING) != GAME_EXEC_STATE_RUNNING)
@@ -911,15 +1031,18 @@ namespace Launcher
                     this.Dispatcher.InvokeAsync(() => this.SetValue(GameExecutingProperty, false)).Wait();
                 };
 
-                // Hook game input
-                if (hook.Hookup(game))
+                if (useKeyboardHook)
                 {
-                    hook.KeyDown += inputRecieved;
-                    hookTimer = new System.Threading.Timer(GameInputTimer, new KeyValuePair<GameElement, Process>(element, game), closeGameOnNoInputTimeout, System.Threading.Timeout.InfiniteTimeSpan);
-                }
-                else
-                {
-                    log.Warn("{0} could not be hooked for keyboard tracking.", element.Name);
+                    // Hook game input
+                    if (hook.Hookup(game))
+                    {
+                        hook.KeyDown += inputRecieved;
+                        hookTimer = new System.Threading.Timer(GameInputTimer, new KeyValuePair<GameElement, Process>(element, game), closeGameOnNoInputTimeout, System.Threading.Timeout.InfiniteTimeSpan);
+                    }
+                    else
+                    {
+                        log.Warn("{0} could not be hooked for keyboard tracking.", element.Name);
+                    }
                 }
             }
         }
